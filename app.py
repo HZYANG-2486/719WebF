@@ -1,5 +1,7 @@
 #719WEBF Ver.1.3 2026
-#Made By HZYANG
+#Made By HZYANG+AI
+#Use [poster-girl-l2d-2233](https://github.com/xb2016/poster-girl-l2d-2233)(GPLv2)
+
 
 from flask import Flask, request, jsonify, send_from_directory, render_template, render_template_string, abort, session, redirect, url_for
 import random
@@ -275,7 +277,7 @@ def transfer_page():
     <h1>📤 传输中心</h1>
 
     <div class="box">
-        <h2>🔗 面对面直传（WebRTC 真·直连）</h2>
+        <h2>🔗 面对面直传</h2>
         <button class="btn" onclick="joinP2P()">加入在线</button>
         <button class="btn" onclick="refreshPeers()">刷新在线列表</button>
         <div id="peerList"></div>
@@ -299,7 +301,7 @@ def transfer_page():
     </div>
 
     <div class="box">
-        <h2>☁️ 临时暂存（1小时自动删）</h2>
+        <h2>☁️ 临时暂存</h2>
         <input type="file" id="tempFile" multiple>
         <button class="btn" onclick="uploadTemp()">上传暂存</button>
         <div id="fileList"></div>
@@ -597,7 +599,7 @@ def error_418(e):
 # ========== 启动 ==========
 if __name__ == '__main__':
     print("="*50)
-    print("719WEBF 增强版（P2P直传 + 临时暂存）")
+    print("719WEBF")
     print("="*50)
     print(f"✅ 共享目录：{SHARE_FOLDER}")
     print(f"✅ 访问首页：http://127.0.0.1:{SERVER_PORT}")
