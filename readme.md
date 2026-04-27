@@ -31,8 +31,11 @@ python app.py [-d DIR] [-p PORT] [-t TITLE] [-host HOST]
 ## 授权
 由于项目采用了[poster-girl-l2d-2233](https://github.com/xb2016/poster-girl-l2d-2233),其使用 GPL 2.0 协议，故本项目也采用相同的开源协议进行授权。
 
-## 使用的开源项目
+## 使用的项目
  - [poster-girl-l2d-2233](https://github.com/xb2016/poster-girl-l2d-2233)
+ - [live2d.min.js](https://moedog.org/wp-content/themes/Kratos-alpha/static/js/live2d.js?ver=l2d)取自[moedog.org](https://moedog.org/)所托管的内容
+ - [jquery.min.js](https://github.com/jquery/jquery)
+
  
 ***
 HZYANG 2026
