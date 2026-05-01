@@ -38,6 +38,18 @@ Cloudflare_error_page使用MIT授权
 
 ## 人物版权
  - 均通过网络加载,本服务**不部署**任何模型
- 
+
+## 更多
+Live2D 相关代码的使用请遵守对应的许可：
+
+Live2D Cubism SDK 2.1 的许可证：
+Live2D SDK License Agreement (Public)
+
+Live2D Cubism SDK 5 的许可证：
+Live2D Cubism Core は Live2D Proprietary Software License で提供しています。
+https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_cn.html
+Live2D Cubism Components は Live2D Open Software License で提供しています。
+https://www.live2d.com/eula/live2d-open-software-license-agreement_cn.html
+
 ***
 HZYANG 2026
