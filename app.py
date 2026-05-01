@@ -1,7 +1,6 @@
 #719WEBF Ver.1.3 2026
 #Made By HZYANG+AI
-#Use [poster-girl-l2d-2233](https://github.com/xb2016/poster-girl-l2d-2233)(GPLv2)
-
+#Use https://github.com/stevenjoezhang/live2d-widget (MIT) + Live2D Sample Model
 
 from flask import Flask, request, jsonify, send_from_directory, render_template, render_template_string, abort, session, redirect, url_for
 import random
@@ -28,7 +27,7 @@ parser.add_argument('-host', default='0.0.0.0', help='指定绑定的IP地址（
 args = parser.parse_args()
 
 app = Flask(__name__)
-app.secret_key = f"719webf_{uuid.uuid4().hex}"  # 会话必需
+app.secret_key = f"719webf_{uuid.uuid4().hex}"
 
 SHARE_FOLDER = os.path.abspath(args.dir)
 SERVER_PORT = args.port
@@ -36,46 +35,18 @@ HOME_TITLE = args.title
 SERVER_HOST = args.host
 
 STATIC_FOLDER = os.path.join(app.root_path, 'static')
-UPLOAD_TEMP_FOLDER = os.path.join(app.root_path, "temp_uploads")  # 暂存目录
+UPLOAD_TEMP_FOLDER = os.path.join(app.root_path, "temp_uploads")
 os.makedirs(UPLOAD_TEMP_FOLDER, exist_ok=True)
 
-# ===================== 全局存储（内存） =====================
-peers = {}          # P2P在线节点
+# ===================== 全局存储 =====================
+peers = {}
 peer_lock = Lock()
-temp_files = {}     # 临时文件记录
+temp_files = {}
 file_lock = Lock()
-signal_box = {}     # ✅ 修复：信令队列（每人独立）
+signal_box = {}
 last_signal = {}
 
-# ===================== 原 PHP 配置直接搬过来 =====================
-default_id = None
-r18 = False
-
-modellist = {
-    "default.v2":            ["texture_01.png","texture_02.png","texture_03.png"],
-    "2016.xmas":             ["texture_01.png","texture_02.png",["texture_03_1.png","texture_03_2.png"]],
-    "2017.cba-normal":       ["texture_01.png","texture_02.png","texture_03.png"],
-    "2017.cba-super":        ["texture_01.png","texture_02.png","texture_03.png"],
-    "2017.summer.super":     ["texture_01.png","texture_02.png",["texture_03_1.png","texture_03_2.png"]],
-    "2017.newyear":          ["texture_01.png","texture_02.png","texture_03.png"],
-    "2017.school":           ["texture_01.png","texture_02.png","texture_03.png"],
-    "2017.summer.normal":    ["texture_01.png","texture_02.png",["texture_03_1.png","texture_03_2.png"]],
-    "2017.tomo-bukatsu.high":["texture_01.png","texture_02.png","texture_03.png"],
-    "2017.valley":           ["texture_01.png","texture_02.png","texture_03.png"],
-    "2017.vdays":            ["texture_01.png","texture_02.png","texture_03.png"],
-    "2017.tomo-bukatsu.low": ["texture_01.png","texture_02.png","texture_03.png"],
-    "2018.bls-summer":       ["texture_01.png","texture_02.png","texture_03.png"],
-    "2018.bls-winter":       ["texture_01.png","texture_02.png","texture_03.png"],
-    "2018.lover":            ["texture_01.png","texture_02.png","texture_03.png"],
-    "2018.spring":           ["texture_01.png","texture_02.png","texture_03.png"],
-    "2019.deluxe":           ["texture_01.png","texture_02.png",["texture_03_1.png","texture_03_2.png"]],
-    "2019.summer":           ["texture_01.png","texture_02.png","texture_03.png"],
-    "2019.bls":              ["texture_01.png","texture_02.png","texture_03.png"],
-    "2020.newyear":          ["texture_01.png","texture_02.png","texture_03.png"],
-    "2018.playwater":        ["texture_01.png","texture_02.png","texture_03.png"]
-}
-
-# ========== 文件大小格式化工具函数 ==========
+# ========== 文件大小格式化 ==========
 def format_size(size_bytes):
     if size_bytes < 1024:
         return f"{size_bytes} B"
@@ -86,7 +57,7 @@ def format_size(size_bytes):
     else:
         return f"{size_bytes / (1024 ** 3):.2f} GB"
 
-# ========== 时间格式化工具函数 ==========
+# ========== 时间格式化 ==========
 def format_mtime(mtime):
     return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -96,7 +67,7 @@ def clean_expired_files():
     expired = []
     with file_lock:
         for fid, info in temp_files.items():
-            if now - info["upload_time"] > 3600:  # 1小时过期
+            if now - info["upload_time"] > 3600:
                 expired.append(fid)
         for fid in expired:
             path = temp_files[fid]["path"]
@@ -114,64 +85,12 @@ def get_safe_path(relative_path):
         abort(403)
     return target_path
 
-# ===================== API =====================
-def getParam(key, default=""):
-    v = request.values.get(key, default)
-    return v.strip() if isinstance(v, str) else default
+# ===================== live2d-widget 静态资源 =====================
+@app.route("/live2d/<path:filename>")
+def live2d_static(filename):
+    return send_from_directory(os.path.join(STATIC_FOLDER, 'live2d'), filename)
 
-def getTexture(modellist, modelname, id):
-    tex = modellist[modelname][id]
-    if isinstance(tex, list):
-        return tex[random.randint(0, 1)]
-    return tex
-
-@app.route("/l2d/model/api")
-def api():
-    person_ = getParam("p")
-    id_     = getParam("id")
-    modelname = list(modellist.keys())
-    modelnum  = len(modelname)
-    if not r18:
-        modelnum -= 1
-    if not id_.isdigit():
-        id_ = 0
-    if person_ in ("22", "33"):
-        person = person_
-    else:
-        person = "33"
-    id = int(id_) % modelnum
-    current_model = modelname[id]
-    what = getTexture(modellist, current_model, 2)
-    live2dcfg = {
-        "type": "Live2D Model Setting",
-        "name": f"{person}-{current_model}",
-        "label": person,
-        "model": f"{person}/{person}.v2.moc",
-        "textures": [
-            f"{person}/texture_00.png",
-            f"{person}/closet.{current_model}/texture_01.png",
-            f"{person}/closet.{current_model}/texture_02.png",
-            f"{person}/closet.{current_model}/{what}"
-        ],
-        "hit_areas_custom": {"head_x": [-0.35, 0.6],"head_y": [0.19, -0.2],"body_x": [-0.3, -0.25],"body_y": [0.3, -0.9]},
-        "layout": {"center_x": -0.05,"center_y": 0.25,"height": 2.7},
-        "motions": {
-            "idle": [{"file": f"{person}/{person}.v2.idle-01.mtn", "fade_in": 2000, "fade_out": 2000}],
-            "tap_body": [{"file": f"{person}/{person}.v2.touch.mtn", "fade_in": 150, "fade_out": 100}],
-            "thanking": [{"file": f"{person}/{person}.v2.thanking.mtn", "fade_in": 2000, "fade_out": 2000}]
-        }
-    }
-    response = jsonify(live2dcfg)
-    response.headers["Content-Type"] = "application/json; charset=UTF-8"
-    response.headers["Cache-Control"] = "no-cache"
-    return response
-
-# ===================== 静态资源 =====================
-@app.route("/l2d/<path:filename>")
-def l2d_static(filename):
-    return send_from_directory(os.path.join(STATIC_FOLDER, 'l2d'), filename)
-
-# ===================== 【新增】P2P 面对面直传 =====================
+# ===================== P2P 面对面直传 =====================
 @app.route("/p2p/join")
 def p2p_join():
     clean_expired_files()
@@ -189,8 +108,7 @@ def p2p_list():
         online = [u for u,t in peers.items() if now - t["online"] < 30]
     return jsonify({"code":0,"list":online})
 
-# ===================== 【最终修复版】P2P 信令接口 =====================
-# 发送信令（POST）
+# ===================== P2P 信令接口 =====================
 @app.route("/p2p/signal/send", methods=["POST"])
 def p2p_signal_send():
     data = request.json
@@ -205,7 +123,6 @@ def p2p_signal_send():
         signal_box[to].append(data)
     return jsonify({"code": 0})
 
-# 接收信令（GET）
 @app.route("/p2p/signal/recv")
 def p2p_signal_recv():
     uid = session.get("p2p_uid")
@@ -218,7 +135,7 @@ def p2p_signal_recv():
         msg = signal_box[uid].pop(0)
     return jsonify(msg)
 
-# ===================== 【新增】临时暂存上传 =====================
+# ===================== 临时上传 =====================
 @app.route("/temp/upload", methods=["POST"])
 def temp_upload():
     clean_expired_files()
@@ -242,7 +159,6 @@ def temp_upload():
     url = f"/temp/download/{fid}"
     return jsonify({"code":0,"fid":fid,"url":url,"name":filename})
 
-# ===================== 【新增】临时暂存下载 =====================
 @app.route("/temp/download/<fid>")
 def temp_download(fid):
     clean_expired_files()
@@ -252,7 +168,7 @@ def temp_download(fid):
         abort(404)
     return send_from_directory(UPLOAD_TEMP_FOLDER, fid, as_attachment=True, download_name=info["name"])
 
-# ===================== 【新增】传输中心页面 =====================
+# ===================== 传输中心 =====================
 @app.route("/transfer")
 def transfer_page():
     return render_template_string('''
@@ -367,10 +283,8 @@ async function connectPeer(){
     dataChannel = pc.createDataChannel("file");
     setupDC();
 
-    // 👇 关键修复：用ID大小决定谁是Offer方
     const isInitiator = myUid < targetUid;
     if(isInitiator){
-        // 只有ID小的一方发起Offer
         let offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await sendSignal({
@@ -382,7 +296,6 @@ async function connectPeer(){
     loopSignal();
 }
 
-// 原来的 sendSignal 函数，改成下面这样
 async function sendSignal(data){
     await fetch("/p2p/signal/send",{
         method:"POST",
@@ -401,7 +314,6 @@ async function loopSignal(){
         }
 
         if(data.type === "offer"){
-            // 收到Offer，设置并创建Answer（只有非发起方会执行）
             await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
             let ans = await pc.createAnswer();
             await pc.setLocalDescription(ans);
@@ -411,7 +323,6 @@ async function loopSignal(){
             });
         }
         else if(data.type === "answer"){
-            // 收到Answer，设置（只有发起方会执行）
             await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
         }
         else if(data.type === "candidate"){
@@ -420,7 +331,6 @@ async function loopSignal(){
     }
 }
 
-// 配置数据通道
 function setupDC(){
     dataChannel.onopen = ()=>{
         document.getElementById("connStatus").innerText = "✅ 已连接，可以发文件";
@@ -435,7 +345,6 @@ function setupDC(){
     dataChannel.onmessage = onMsg;
 }
 
-// 发送文件
 function sendP2PFile(){
     let f = document.getElementById("p2pFile").files[0];
     if(!f) return;
@@ -457,7 +366,6 @@ function nextChunk(){
     });
 }
 
-// 接收文件
 function onMsg(e){
     if(typeof e.data === "string"){
         let j = JSON.parse(e.data);
@@ -485,7 +393,6 @@ function onMsg(e){
     }
 }
 
-// 临时暂存上传
 async function uploadTemp(){
     let input = document.getElementById("tempFile");
     let list = document.getElementById("fileList");
@@ -505,12 +412,12 @@ async function uploadTemp(){
 </html>
     ''')
 
-# ===================== 首页 =====================
+# ===================== 首页（自动加载 Live2D） =====================
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", title=HOME_TITLE)
 
-# ========== 文件共享路由 ==========
+# ========== 文件共享 ==========
 @app.route('/files/', defaults={'relative_path': ''})
 @app.route('/files/<path:relative_path>')
 def serve_directory(relative_path):
@@ -546,7 +453,7 @@ def serve_directory(relative_path):
     else:
         abort(404)
 
-# ========== 目录列表模板 ==========
+# ========== 目录模板 ==========
 DIRECTORY_TEMPLATE = '''
 <!DOCTYPE HTML>
 <html>
@@ -576,6 +483,7 @@ DIRECTORY_TEMPLATE = '''
     </ul>
     <hr>
     <a href="/">首页</a> | <a href="/transfer">传输中心</a>
+    <script src="/live2d/dist/autoload.js"></script>
 </body>
 </html>
 '''

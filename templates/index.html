@@ -1,46 +1,21 @@
-{% extends "base.html" %}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{{ title }}</title>
+    <style>
+        body{text-align:center;padding:50px;font-family:Arial;}
+        h1{color:#2c3e50;}
+        .link{margin:15px;}
+        a{color:#0066cc;text-decoration:none;font-size:18px;}
+        a:hover{text-decoration:underline;}
+    </style>
+</head>
+<body>
+    <h1>{{ title }}</h1>
+    <div class="link"><a href="/files/">📁 文件浏览</a></div>
+    <div class="link"><a href="/transfer">📤 传输中心</a></div>
 
-<!-- 页面标题 -->
-{% block title %}719WEBF - Welcome Home!{% endblock %}
-
-<!-- 页面自定义CSS -->
-{% block css %}
-<style>
-    body {
-        font-family: sans-serif;
-        margin: 50px auto;
-        max-width: 800px;
-        padding: 0 20px;
-        text-align: center;
-    }
-    .btn {
-        display: inline-block;
-        padding: 10px 20px;
-        background-color: #0066cc;
-        color: white;
-        text-decoration: none;
-        border-radius: 5px;
-        margin-top: 20px;
-    }
-    .btn:hover {
-        background-color: #0052a3;
-    }
-</style>
-{% endblock %}
-
-<!-- 页面主体内容 -->
-{% block content %}
-<div class="home-content">
-    <h1>719WEBF</h1>
-    <a href="/files" class="btn">进入文件共享目录</a>
-    <a href="/transfer" class="btn">传输...</a>
-</div>
-{% endblock %}
-
-<!-- 页面自定义JS -->
-{% block js %}
-<script>
-    // 首页专属JS
-    console.log("首页加载完成");
-</script>
-{% endblock %}
+    <script src="/live2d/dist/autoload.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+.git
+
+server_uploads/
+temp_uploads/
+
+start_server.bat
+start_server-basic.bat
+
+LICENSE
+
+*.py
+!app.py
+!inforun.py
+
+# emm...
+*.moc
+*.moc3
+*.model.json
+*texture*.png
+live2d/
+model/
+models/
