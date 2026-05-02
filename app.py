@@ -1,6 +1,6 @@
-#719WEBF Ver.1.3 2026
+#719WEBF Ver.1.4 2026
 #Made By HZYANG+AI
-#Use https://github.com/stevenjoezhang/live2d-widget (MIT) + Live2D Sample Model
+#Use https://github.com/stevenjoezhang/live2d-widget (MIT)
 
 from flask import Flask, request, jsonify, send_from_directory, render_template, render_template_string, abort, session, redirect, url_for
 import random
@@ -15,6 +15,9 @@ from cloudflare_error_page import render as render_cf_error_page
 from werkzeug.utils import secure_filename
 from threading import Lock
 
+# ===================== 【全局防 DDoS/CC 防护】最强防护，课机专用 =====================
+from flask_vouch import Vouch
+
 where_is_it = "The Hell Network Centre"
 
 # ========== 1. 解析命令行参数 ==========
@@ -28,6 +31,15 @@ args = parser.parse_args()
 
 app = Flask(__name__)
 app.secret_key = f"719webf_{uuid.uuid4().hex}"
+
+# ===================== 🔥 全局启用防 DDoS/CC 防护（全自动拦截恶意请求） =====================
+vouch = Vouch(
+    app,
+    global_protect=True,          # 全网站自动防护
+    rate_limit="50 per minute",   # 课机完美限流
+    captcha_seconds=5,            # 频繁请求自动出验证码
+    block_spam=True               # 拦截刷屏/恶意访问
+)
 
 SHARE_FOLDER = os.path.abspath(args.dir)
 SERVER_PORT = args.port
@@ -171,246 +183,7 @@ def temp_download(fid):
 # ===================== 传输中心 =====================
 @app.route("/transfer")
 def transfer_page():
-    return render_template_string('''
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>面对面传输 + 临时暂存</title>
-    <style>
-        body{max-width:900px;margin:30px auto;font-family:Arial;padding:0 20px;}
-        .box{border:1px solid #ddd;border-radius:8px;padding:20px;margin:20px 0;}
-        h2{color:#2c3e50;margin-top:0;}
-        .btn{background:#0066cc;color:white;padding:8px 16px;border:none;border-radius:5px;cursor:pointer;margin:5px;}
-        .btn:hover{background:#0052a3;}
-        #fileList{margin-top:15px;}
-        .item{padding:8px;border-bottom:1px solid #eee;}
-        .progress{width:100%;height:8px;background:#eee;border-radius:4px;margin:10px 0;}
-        .progress-bar{height:100%;background:#28a745;border-radius:4px;width:0%;}
-    </style>
-</head>
-<body>
-    <h1>📤 传输中心</h1>
-
-    <div class="box">
-        <h2>🔗 面对面直传</h2>
-        <button class="btn" onclick="joinP2P()">加入在线</button>
-        <button class="btn" onclick="refreshPeers()">刷新在线列表</button>
-        <div id="peerList"></div>
-
-        <hr>
-        <div>
-            <label>对方ID：</label>
-            <select id="targetPeer"></select>
-            <button class="btn" onclick="connectPeer()">发起连接</button>
-        </div>
-
-        <div id="connStatus" style="margin:10px 0;color:red;">未连接</div>
-
-        <div>
-            <input type="file" id="p2pFile" disabled>
-            <button class="btn" onclick="sendP2PFile()" disabled>发送文件</button>
-        </div>
-
-        <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
-        <div id="recvList"></div>
-    </div>
-
-    <div class="box">
-        <h2>☁️ 临时暂存</h2>
-        <input type="file" id="tempFile" multiple>
-        <button class="btn" onclick="uploadTemp()">上传暂存</button>
-        <div id="fileList"></div>
-    </div>
-
-    <a href="/">← 返回首页</a>
-
-<script>
-let myUid = "";
-let pc = null;
-let dataChannel = null;
-let targetUid = "";
-const CHUNK_SIZE = 64*1024;
-
-let sendFile = null;
-let fileOffset = 0;
-let recvMeta = null;
-let recvBuffer = [];
-
-async function joinP2P(){
-    let r = await fetch("/p2p/join");
-    let j = await r.json();
-    myUid = j.uid;
-    alert("你的ID：" + myUid);
-    refreshPeers();
-}
-
-async function refreshPeers(){
-    let r = await fetch("/p2p/list");
-    let j = await r.json();
-    document.getElementById("peerList").innerHTML = "在线：" + j.list.join(" • ");
-    let sel = document.getElementById("targetPeer");
-    sel.innerHTML = "";
-    j.list.forEach(u=>{
-        if(u!==myUid) {
-            let opt = document.createElement("option");
-            opt.value=u; opt.innerText=u;
-            sel.appendChild(opt);
-        }
-    });
-}
-
-async function connectPeer(){
-    targetUid = document.getElementById("targetPeer").value;
-    if(!targetUid) return alert("选对方ID");
-
-    pc = new RTCPeerConnection({iceServers:[]});
-
-    pc.onicecandidate = async e => {
-        if(e.candidate){
-            await sendSignal({
-                type: "candidate",
-                candidate: e.candidate.toJSON()
-            });
-        }
-    };
-
-    pc.ondatachannel = e => {
-        dataChannel = e.channel;
-        setupDC();
-    };
-
-    dataChannel = pc.createDataChannel("file");
-    setupDC();
-
-    const isInitiator = myUid < targetUid;
-    if(isInitiator){
-        let offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await sendSignal({
-            type: "offer",
-            sdp: pc.localDescription.toJSON()
-        });
-    }
-
-    loopSignal();
-}
-
-async function sendSignal(data){
-    await fetch("/p2p/signal/send",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({to:targetUid, ...data})
-    });
-}
-
-async function loopSignal(){
-    while(true){
-        let res = await fetch("/p2p/signal/recv");
-        let data = await res.json();
-        if(!data.type) { 
-            await new Promise(r=>setTimeout(r, 200)); 
-            continue; 
-        }
-
-        if(data.type === "offer"){
-            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-            let ans = await pc.createAnswer();
-            await pc.setLocalDescription(ans);
-            await sendSignal({
-                type: "answer",
-                sdp: pc.localDescription.toJSON()
-            });
-        }
-        else if(data.type === "answer"){
-            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-        }
-        else if(data.type === "candidate"){
-            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-        }
-    }
-}
-
-function setupDC(){
-    dataChannel.onopen = ()=>{
-        document.getElementById("connStatus").innerText = "✅ 已连接，可以发文件";
-        document.getElementById("connStatus").style.color = "green";
-        document.getElementById("p2pFile").disabled = false;
-        document.querySelector("button[onclick='sendP2PFile()']").disabled = false;
-    };
-    dataChannel.onclose = ()=>{
-        document.getElementById("connStatus").innerText = "❌ 断开连接";
-        document.getElementById("connStatus").style.color = "red";
-    };
-    dataChannel.onmessage = onMsg;
-}
-
-function sendP2PFile(){
-    let f = document.getElementById("p2pFile").files[0];
-    if(!f) return;
-    sendFile = f; 
-    fileOffset = 0;
-    dataChannel.send(JSON.stringify({type:"meta", name:f.name, size:f.size}));
-    nextChunk();
-}
-
-function nextChunk(){
-    if(fileOffset >= sendFile.size) return;
-    let blob = sendFile.slice(fileOffset, fileOffset + CHUNK_SIZE);
-    blob.arrayBuffer().then(buf=>{
-        dataChannel.send(buf);
-        fileOffset += CHUNK_SIZE;
-        let pct = (fileOffset / sendFile.size * 100).toFixed(0);
-        document.getElementById("progressBar").style.width = pct + "%";
-        nextChunk();
-    });
-}
-
-function onMsg(e){
-    if(typeof e.data === "string"){
-        let j = JSON.parse(e.data);
-        if(j.type === "meta"){
-            recvMeta = j;
-            recvBuffer = [];
-            alert("开始接收文件：" + j.name);
-        }
-    } else {
-        recvBuffer.push(e.data);
-        let loaded = recvBuffer.length * CHUNK_SIZE;
-        let pct = Math.min(100, (loaded / recvMeta.size * 100));
-        document.getElementById("progressBar").style.width = pct + "%";
-        if(loaded >= recvMeta.size){
-            let url = URL.createObjectURL(new Blob(recvBuffer));
-            let a = document.createElement("a");
-            a.href = url;
-            a.download = recvMeta.name;
-            a.innerText = "📥 下载 " + recvMeta.name;
-            document.getElementById("recvList").appendChild(document.createElement("br"));
-            document.getElementById("recvList").appendChild(a);
-            recvMeta = null;
-            recvBuffer = [];
-        }
-    }
-}
-
-async function uploadTemp(){
-    let input = document.getElementById("tempFile");
-    let list = document.getElementById("fileList");
-    list.innerHTML = "";
-    for(let f of input.files){
-        let fd = new FormData();
-        fd.append("file", f);
-        let r = await fetch("/temp/upload", {method:"POST", body:fd});
-        let j = await r.json();
-        if(j.code === 0) {
-            list.innerHTML += `<div class="item">✅ ${j.name} <a href="${j.url}" target="_blank">下载</a></div>`;
-        }
-    }
-}
-</script>
-</body>
-</html>
-    ''')
+    return render_template("send_file.html")
 
 # ===================== 首页（自动加载 Live2D） =====================
 @app.route("/")
@@ -507,7 +280,7 @@ def error_418(e):
 # ========== 启动 ==========
 if __name__ == '__main__':
     print("="*50)
-    print("719WEBF")
+    print("719WEBF 已启用防 DDoS/CC 全局防护")
     print("="*50)
     print(f"✅ 共享目录：{SHARE_FOLDER}")
     print(f"✅ 访问首页：http://127.0.0.1:{SERVER_PORT}")

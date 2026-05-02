@@ -7,6 +7,7 @@
 3. 共享文件夹服务
 4. ~~AI使用~~
 5. 看板娘(你可以关闭, 基于[live2d-widget](https://github.com/stevenjoezhang/live2d-widget)做了部分适应性修改)
+6. 使用 [Flask_vouch](https://github.com/tn3w/flask-Vouch) 进行防DDOS防护(~~主要除非你是嘉豪应该不会乱搞吧owo~~)
 
 ## 使用方法
 1. Star It!
@@ -26,7 +27,8 @@ python app.py [-d DIR] [-p PORT] [-t TITLE] [-host HOST]
 ```
 但是你必须要安装以下库:
 1. Flask
-2. cloudflare_error_page
+2. Cloudflare_error_page
+3. Flask_vouch<br>
 这些均可以通过pip安装
 
 ## 授权

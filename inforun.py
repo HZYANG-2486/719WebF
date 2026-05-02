@@ -119,6 +119,7 @@ chcp 65001
 
 pip install flask
 pip install cloudflare_error_page
+pip install flask-Vouch
 :: 清屏，让界面更整洁
 cls
 
