@@ -73,7 +73,7 @@ def format_size(size_bytes):
 def format_mtime(mtime):
     return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 清理过期临时文件 ==========
+# ========== 清理过期临时文件（全局共享版） ==========
 def clean_expired_files():
     now = time.time()
     expired = []
@@ -86,6 +86,7 @@ def clean_expired_files():
             if os.path.exists(path):
                 os.remove(path)
             del temp_files[fid]
+
 
 # ========== 安全路径 ==========
 def get_safe_path(relative_path):
@@ -147,7 +148,21 @@ def p2p_signal_recv():
         msg = signal_box[uid].pop(0)
     return jsonify(msg)
 
-# ===================== 临时上传 =====================
+# ========== 清理过期临时文件（全局共享版） ==========
+def clean_expired_files():
+    now = time.time()
+    expired = []
+    with file_lock:
+        for fid, info in temp_files.items():
+            if now - info["upload_time"] > 3600:
+                expired.append(fid)
+        for fid in expired:
+            path = temp_files[fid]["path"]
+            if os.path.exists(path):
+                os.remove(path)
+            del temp_files[fid]
+
+# ===================== 临时上传（全局公开） =====================
 @app.route("/temp/upload", methods=["POST"])
 def temp_upload():
     clean_expired_files()
@@ -161,6 +176,7 @@ def temp_upload():
     save_path = os.path.join(UPLOAD_TEMP_FOLDER, fid)
     file.save(save_path)
     size = os.path.getsize(save_path)
+
     with file_lock:
         temp_files[fid] = {
             "name": filename,
@@ -168,17 +184,46 @@ def temp_upload():
             "path": save_path,
             "upload_time": time.time()
         }
+
     url = f"/temp/download/{fid}"
     return jsonify({"code":0,"fid":fid,"url":url,"name":filename})
 
+# ===================== 临时下载（全局公开） =====================
 @app.route("/temp/download/<fid>")
 def temp_download(fid):
     clean_expired_files()
+
+    # 全局读取，所有人可见
     with file_lock:
         info = temp_files.get(fid)
+    
     if not info:
         abort(404)
-    return send_from_directory(UPLOAD_TEMP_FOLDER, fid, as_attachment=True, download_name=info["name"])
+    
+    return send_from_directory(
+        UPLOAD_TEMP_FOLDER,
+        fid,
+        as_attachment=True,
+        download_name=info["name"]
+    )
+
+@app.route("/temp/list")
+def temp_list():
+    clean_expired_files()
+    now = time.time()
+    res = []
+    with file_lock:
+        for fid, info in temp_files.items():
+            left = int(3600 - (now - info["upload_time"]))
+            if left < 0:
+                continue
+            res.append({
+                "fid": fid,
+                "name": info["name"],
+                "left_min": left // 60,
+                "left_sec": left % 60
+            })
+    return jsonify({"code":0,"list":res})
 
 # ===================== 传输中心 =====================
 @app.route("/transfer")
