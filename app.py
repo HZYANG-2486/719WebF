@@ -35,10 +35,9 @@ app.secret_key = f"719webf_{uuid.uuid4().hex}"
 # ===================== 🔥 全局启用防 DDoS/CC 防护（全自动拦截恶意请求） =====================
 vouch = Vouch(
     app,
-    global_protect=True,          # 全网站自动防护
-    rate_limit="50 per minute",   # 课机完美限流
-    captcha_seconds=5,            # 频繁请求自动出验证码
-    block_spam=True               # 拦截刷屏/恶意访问
+    session_duration=86400 * 7,   # 验证一次，7天内不用再验证
+    sliding_session=True,         # 只要访问就自动续期（不会过期）
+    block_duration=300,           # 真攻击才封5分钟，不封死正常用户
 )
 
 SHARE_FOLDER = os.path.abspath(args.dir)
