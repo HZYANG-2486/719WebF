@@ -2,20 +2,67 @@
 <html>
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }}</title>
     <style>
-        body{text-align:center;padding:50px;font-family:Arial;}
-        h1{color:#2c3e50;}
-        .link{margin:15px;}
-        a{color:#0066cc;text-decoration:none;font-size:18px;}
-        a:hover{text-decoration:underline;}
+        body{
+            text-align:center;
+            padding:50px;
+            font-family:Arial, sans-serif;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f8f9fa;
+            box-sizing: border-box;
+        }
+        h1{
+            color:#2c3e50;
+            margin-bottom: 40px;
+            font-weight: normal;
+            letter-spacing: 1px;
+        }
+        .link{
+            margin:20px auto;
+            max-width: 280px;
+        }
+        a{
+            display: block;
+            padding: 14px 20px;
+            color:#0066cc;
+            text-decoration:none;
+            font-size:18px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            transition: all 0.2s ease;
+        }
+        a:hover{
+            text-decoration:none;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,102,204,0.15);
+            color: #004d99;
+        }
+        .footer{
+            margin-top: 60px;
+            font-size: 14px;
+            color: #7f8c8d;
+        }
     </style>
 </head>
 <body>
     <h1>{{ title }}</h1>
+    
     <div class="link"><a href="/files/">📁 文件浏览</a></div>
     <div class="link"><a href="/transfer">📤 传输中心</a></div>
 
+    <div class="footer">
+        Powered By 719WebF
+    </div>
+    
+    <!--谁删版权谁没母-->
+    <!--Don't Delete the copyright!--> 
+    <!--没啥意思,就是不要删除版权-->
+    <!--HZYANG 2026-->
+    
     <script src="/live2d/dist/autoload.js"></script>
 </body>
 </html>

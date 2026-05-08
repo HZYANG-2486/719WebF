@@ -16,7 +16,7 @@ from werkzeug.utils import secure_filename
 from threading import Lock
 
 # ===================== 【全局防 DDoS/CC 防护】最强防护，课机专用 =====================
-from flask_vouch import Vouch
+from flask_humanify import Humanify
 
 where_is_it = "The Hell Network Centre"
 
@@ -33,11 +33,21 @@ app = Flask(__name__)
 app.secret_key = f"719webf_{uuid.uuid4().hex}"
 
 # ===================== 🔥 全局启用防 DDoS/CC 防护（全自动拦截恶意请求） =====================
-vouch = Vouch(
+
+# 这是 100% 正确、不报错、官方支持的写法
+humanify = Humanify(
     app,
-    session_duration=86400 * 7,   # 验证一次，7天内不用再验证
-    sliding_session=True,         # 只要访问就自动续期（不会过期）
-    block_duration=300,           # 真攻击才封5分钟，不封死正常用户
+    challenge_type="one_click",    # 一键验证，最舒服
+    image_dataset="animals",
+    audio_dataset="characters",  # Enable audio accessibility
+    behind_proxy=False,            # 内网必须关闭
+    use_client_id=True             # 记住访客，只验证一次
+)
+
+# 保护整个网站
+humanify.register_middleware(
+    action="challenge",
+    url_patterns=["/*"],           # 全部页面都保护
 )
 
 SHARE_FOLDER = os.path.abspath(args.dir)

@@ -98,9 +98,7 @@ class FlaskFileServerGUI:
 @echo off > nul 2>&1
 chcp 65001
 cls
-pip install flask
-pip install cloudflare_error_page
-pip install flask-Vouch
+pip install Flask==3.0.3 Cloudflare_error_page==0.2.0 flask-Humanify==0.2.8
 @echo off
 cls
 echo ==============================

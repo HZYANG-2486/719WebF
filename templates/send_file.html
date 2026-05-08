@@ -2,57 +2,103 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>面对面传输 + 临时暂存</title>
+    <title>{{title}} | 传输中心</title>
     <style>
-        body{max-width:900px;margin:30px auto;font-family:Arial;padding:0 20px;}
-        .box{border:1px solid #ddd;border-radius:8px;padding:20px;margin:20px 0;}
-        h2{color:#2c3e50;margin-top:0;}
-        .btn{background:#0066cc;color:white;padding:8px 16px;border:none;border-radius:5px;cursor:pointer;margin:5px;}
+        *{box-sizing:border-box;margin:0;padding:0;}
+        body{max-width:800px;margin:20px auto;font-family:"Microsoft Yahei",Arial;padding:0 15px;line-height:1.6;}
+        h1{text-align:center;color:#222;margin-bottom:25px;font-size:24px;}
+        .card{border:1px solid #e5e7eb;border-radius:12px;padding:20px;margin-bottom:20px;background:#fff;}
+        .card h2{font-size:18px;color:#1f2937;margin-bottom:15px;border-left:4px solid #0066cc;padding-left:10px;}
+
+        /* 拖拽文件区域 */
+        .drop-box{
+            border:2px dashed #0066cc;
+            border-radius:10px;
+            padding:40px 20px;
+            text-align:center;
+            cursor:pointer;
+            background:#f8fafc;
+            transition:all 0.2s;
+        }
+        .drop-box.active{background:#e6f0ff;border-color:#0052a3;}
+        .drop-box p{color:#666;margin-top:8px;}
+        .file-tip{margin-top:12px;text-align:center;color:#2c3e50;font-weight:bold;}
+        input[type="file"]{display:none;}
+
+        /* 按钮样式 */
+        .btn{
+            background:#0066cc;color:#fff;border:none;
+            padding:10px 20px;border-radius:6px;
+            cursor:pointer;font-size:14px;margin:6px 4px;
+        }
         .btn:hover{background:#0052a3;}
-        .item{padding:8px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;}
+        .btn:disabled{background:#94a3b8;cursor:not-allowed;}
+
+        .row{margin:12px 0;}
+        .gray-text{color:#666;font-size:14px;}
+        .red{color:red;}
+        .green{color:green;}
+
+        /* 进度条 */
+        .progress{width:100%;height:10px;background:#eee;border-radius:5px;margin:15px 0;overflow:hidden;}
+        .progress-bar{height:100%;background:#28a745;width:0%;transition:0.2s;}
+
+        .item{padding:10px 0;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;}
         .expire{color:#999;font-size:13px;}
-        .progress{width:100%;height:8px;background:#eee;border-radius:4px;margin:10px 0;}
-        .progress-bar{height:100%;background:#28a745;border-radius:4px;width:0%;}
+        a{color:#0066cc;text-decoration:none;}
+        .back{margin-top:20px;display:inline-block;color:#666;}
     </style>
 </head>
 <body>
-    <h1>📤 传输中心</h1>
+    <h1>📁 传输中心</h1>
 
-    <div class="box">
-        <h2>🔗 面对面直传</h2>
-        <button class="btn" onclick="joinP2P()">加入在线</button>
-        <button class="btn" onclick="refreshPeers()">刷新在线列表</button>
-        <div id="peerList"></div>
+    <!-- 统一文件选择区 -->
+    <div class="card">
+        <h2>第一步：选择 / 拖拽文件</h2>
+        <div id="dropBox" class="drop-box">
+            <div>点击此处 或 拖拽文件到这里</div>
+            <p>支持任意格式文件</p>
+            <input type="file" id="fileInput" multiple>
+        </div>
+        <div class="file-tip" id="fileTip"></div>
 
-        <hr>
-        <div>
-            <label>对方ID：</label>
-            <select id="targetPeer"></select>
-            <button class="btn" onclick="connectPeer()">发起连接</button>
+        <div style="text-align:center;margin-top:18px;">
+            <button class="btn" onclick="sendP2P()" disabled id="btnP2P">📡 发给对方(面对面)</button>
+            <button class="btn" onclick="uploadTemp()">☁️ 上传临时暂存(1小时)</button>
+        </div>
+    </div>
+
+    <!-- 面对面P2P区域 -->
+    <div class="card">
+        <h2>第二步：面对面直传设置</h2>
+        <div class="row">
+            <button class="btn" onclick="joinP2P()">1. 加入在线</button>
+            <button class="btn" onclick="refreshPeers()">2. 刷新在线好友</button>
+        </div>
+        <div class="row gray-text" id="peerList">在线列表：暂无</div>
+
+        <div class="row" style="margin-top:15px;">
+            <label>选择对方ID：</label>
+            <select id="targetPeer" style="padding:6px;border-radius:4px;border:1px solid #ccc;"></select>
+            <button class="btn" onclick="connectPeer()">3. 发起连接</button>
         </div>
 
-        <div id="connStatus" style="margin:10px 0;color:red;">未连接</div>
+        <div class="row" id="connStatus" class="red">连接状态：未连接</div>
 
-        <div>
-            <input type="file" id="p2pFile" disabled>
-            <button class="btn" onclick="sendP2PFile()" disabled>发送文件</button>
+        <div class="progress">
+            <div id="progressBar" class="progress-bar"></div>
         </div>
-
-        <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
         <div id="recvList"></div>
     </div>
 
-    <div class="box">
-        <h2>☁️ 公共临时暂存（1小时自动过期）</h2>
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:15px;">
-            <input type="file" id="tempFile" multiple>
-            <button class="btn" onclick="uploadTemp()">上传临时文件</button>
-            <button class="btn" onclick="refreshTempList()">刷新列表</button>
-        </div>
-        <div id="fileList"></div>
+    <!-- 临时暂存列表 -->
+    <div class="card">
+        <h2>临时暂存文件列表（1小时自动过期）</h2>
+        <button class="btn" onclick="refreshTempList()">刷新列表</button>
+        <div id="fileList" style="margin-top:15px;"></div>
     </div>
 
-    <a href="/">← 返回首页</a>
+    <a href="/" class="back">← 返回首页</a>
 
 <script>
 let myUid = "";
@@ -66,12 +112,36 @@ let fileOffset = 0;
 let recvMeta = null;
 let recvBuffer = [];
 
-// 页面加载自动刷新公共文件列表
+// 拖拽选文件
+const dropBox = document.getElementById('dropBox');
+const fileInput = document.getElementById('fileInput');
+const fileTip = document.getElementById('fileTip');
+
+dropBox.onclick = () => fileInput.click();
+
+['dragenter','dragover','dragleave','drop'].forEach(e=>dropBox.addEventListener(e,ev=>ev.preventDefault()));
+dropBox.addEventListener('dragover',()=>dropBox.classList.add('active'));
+dropBox.addEventListener('dragleave',()=>dropBox.classList.remove('active'));
+dropBox.addEventListener('drop',e=>{
+    dropBox.classList.remove('active');
+    fileInput.files = e.dataTransfer.files;
+    showFileInfo();
+});
+fileInput.onchange = showFileInfo;
+
+function showFileInfo(){
+    if(fileInput.files.length>0){
+        fileTip.innerText = `已选中：${fileInput.files[0].name}`;
+    }else{
+        fileTip.innerText = '';
+    }
+}
+
 window.onload = function(){
     refreshTempList();
 };
 
-// 刷新公共临时文件列表
+// 临时暂存
 async function refreshTempList(){
     let res = await fetch("/temp/list");
     let json = await res.json();
@@ -88,7 +158,7 @@ async function refreshTempList(){
             <span>${item.name}</span>
             <div>
                 <span class="expire">剩余 ${item.left_min}分${item.left_sec}秒</span>
-                <a href="/temp/download/${item.fid}" target="_blank" style="margin-left:10px;color:#0066cc;">下载</a>
+                <a href="/temp/download/${item.fid}" target="_blank" style="margin-left:10px;">下载</a>
             </div>
         `;
         listDom.appendChild(div);
@@ -96,34 +166,34 @@ async function refreshTempList(){
 }
 
 async function uploadTemp(){
-    let input = document.getElementById("tempFile");
-    if(input.files.length === 0){
-        alert("请先选择文件");
+    if(fileInput.files.length === 0){
+        alert("请先选择或拖拽文件！");
         return;
     }
-    for(let f of input.files){
+    for(let f of fileInput.files){
         let fd = new FormData();
         fd.append("file", f);
         await fetch("/temp/upload", {method:"POST", body:fd});
     }
-    // 上传完刷新公共列表、清空选择
-    input.value = "";
+    fileInput.value = "";
+    fileTip.innerText = "";
     refreshTempList();
+    alert("上传成功！");
 }
 
-// ---------- 下面P2P逻辑完全不动 ----------
+// P2P 逻辑完全原样不动
 async function joinP2P(){
     let r = await fetch("/p2p/join");
     let j = await r.json();
     myUid = j.uid;
-    alert("你的ID：" + myUid);
+    alert("你的在线ID：" + myUid);
     refreshPeers();
 }
 
 async function refreshPeers(){
     let r = await fetch("/p2p/list");
     let j = await r.json();
-    document.getElementById("peerList").innerHTML = "在线：" + j.list.join(" • ");
+    document.getElementById("peerList").innerText = "在线列表：" + j.list.join(" | ");
     let sel = document.getElementById("targetPeer");
     sel.innerHTML = "";
     j.list.forEach(u=>{
@@ -137,16 +207,13 @@ async function refreshPeers(){
 
 async function connectPeer(){
     targetUid = document.getElementById("targetPeer").value;
-    if(!targetUid) return alert("选对方ID");
+    if(!targetUid) return alert("请先选择对方ID");
 
     pc = new RTCPeerConnection({iceServers:[]});
 
     pc.onicecandidate = async e => {
         if(e.candidate){
-            await sendSignal({
-                type: "candidate",
-                candidate: e.candidate.toJSON()
-            });
+            await sendSignal({type:"candidate", candidate:e.candidate.toJSON()});
         }
     };
 
@@ -162,12 +229,8 @@ async function connectPeer(){
     if(isInitiator){
         let offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        await sendSignal({
-            type: "offer",
-            sdp: pc.localDescription.toJSON()
-        });
+        await sendSignal({type:"offer", sdp:pc.localDescription.toJSON()});
     }
-
     loopSignal();
 }
 
@@ -184,18 +247,14 @@ async function loopSignal(){
         let res = await fetch("/p2p/signal/recv");
         let data = await res.json();
         if(!data.type) { 
-            await new Promise(r=>setTimeout(r, 200)); 
+            await new Promise(r=>setTimeout(r,200)); 
             continue; 
         }
-
         if(data.type === "offer"){
             await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
             let ans = await pc.createAnswer();
             await pc.setLocalDescription(ans);
-            await sendSignal({
-                type: "answer",
-                sdp: pc.localDescription.toJSON()
-            });
+            await sendSignal({type:"answer", sdp:pc.localDescription.toJSON()});
         }
         else if(data.type === "answer"){
             await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
@@ -208,21 +267,23 @@ async function loopSignal(){
 
 function setupDC(){
     dataChannel.onopen = ()=>{
-        document.getElementById("connStatus").innerText = "✅ 已连接，可以发文件";
-        document.getElementById("connStatus").style.color = "green";
-        document.getElementById("p2pFile").disabled = false;
-        document.querySelector("button[onclick='sendP2PFile()']").disabled = false;
+        let statusDom = document.getElementById("connStatus");
+        statusDom.innerText = "✅ 连接成功，可以发送文件";
+        statusDom.className = "row green";
+        document.getElementById("btnP2P").disabled = false;
     };
     dataChannel.onclose = ()=>{
-        document.getElementById("connStatus").innerText = "❌ 断开连接";
-        document.getElementById("connStatus").style.color = "red";
+        let statusDom = document.getElementById("connStatus");
+        statusDom.innerText = "❌ 连接已断开";
+        statusDom.className = "row red";
+        document.getElementById("btnP2P").disabled = true;
     };
     dataChannel.onmessage = onMsg;
 }
 
-function sendP2PFile(){
-    let f = document.getElementById("p2pFile").files[0];
-    if(!f) return;
+function sendP2P(){
+    let f = fileInput.files[0];
+    if(!f) return alert("请先选择文件！");
     sendFile = f; 
     fileOffset = 0;
     dataChannel.send(JSON.stringify({type:"meta", name:f.name, size:f.size}));
@@ -268,5 +329,6 @@ function onMsg(e){
     }
 }
 </script>
+<!--Copyright © 2026 HZYANG.-->
 </body>
 </html>
