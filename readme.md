@@ -28,11 +28,12 @@ python app.py [-d DIR] [-p PORT] [-t TITLE] [-host HOST]
 但是你必须要安装以下库:
 1. Flask
 2. Cloudflare_error_page
-3. Flask-Humanify(会下载诸如opencv和numpy)<br>
+3. Flask-Humanify(会下载诸如opencv和numpy)
+4. audiooop(Flask-Humanify需要,但已在Py3.11时已被弃用,你可能需要下载替代者如audioop-lts)<br>
  这些均可以通过pip安装
- 运行以下即可:
+ 运行以下即可安装:
 ```
-pip install Flask==3.0.3 Cloudflare_error_page==0.2.0 flask-Humanify==0.2.8
+pip install Flask==3.0.3 Cloudflare_error_page==0.2.0 flask-Humanify==0.2.8 audioop-lts==0.2.2 audioop-lts==0.2.2
 ```
 
 ## 授权
