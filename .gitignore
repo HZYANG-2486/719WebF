@@ -3,8 +3,7 @@
 server_uploads/
 temp_uploads/
 
-start_server.bat
-start_server-basic.bat
+*.bat
 
 LICENSE
 
