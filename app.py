@@ -234,6 +234,25 @@ def temp_list():
             })
     return jsonify({"code":0,"list":res})
 
+# ===================== 临时文件删除接口 =====================
+@app.route("/temp/delete/<fid>", methods=["POST"])
+def temp_delete(fid):
+    clean_expired_files()
+    with file_lock:
+        info = temp_files.get(fid)
+        if not info:
+            return jsonify({"code":1,"msg":"文件不存在"}), 404
+        
+        # 删除物理文件
+        try:
+            os.remove(info["path"])
+        except:
+            pass
+        # 删除记录
+        del temp_files[fid]
+    
+    return jsonify({"code":0,"msg":"删除成功"})
+
 # ===================== 传输中心 =====================
 @app.route("/transfer")
 def transfer_page():

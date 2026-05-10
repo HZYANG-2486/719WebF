@@ -34,6 +34,13 @@
         .btn:hover{background:#0052a3;}
         .btn:disabled{background:#94a3b8;cursor:not-allowed;}
 
+        .del-btn{
+            background:#dc3545;
+            padding:6px 10px;
+            font-size:12px;
+        }
+        .del-btn:hover{background:#b02a37;}
+
         .row{margin:12px 0;}
         .gray-text{color:#666;font-size:14px;}
         .red{color:red;}
@@ -64,7 +71,7 @@
 
         <div style="text-align:center;margin-top:18px;">
             <button class="btn" onclick="sendP2P()" disabled id="btnP2P">📡 发给对方(面对面)</button>
-            <button class="btn" onclick="uploadTemp()">☁️ 上传临时暂存(1小时)</button>
+            <button class="btn" onclick="uploadTemp()" id="uploadTempBtn">☁️ 上传临时暂存(1小时)</button>
         </div>
     </div>
 
@@ -111,6 +118,11 @@ let sendFile = null;
 let fileOffset = 0;
 let recvMeta = null;
 let recvBuffer = [];
+
+// 防重复上传限制
+let isUploading = false;
+let lastUploadTime = 0;
+const UPLOAD_COOLDOWN = 3000; // 3秒冷却
 
 // 拖拽选文件
 const dropBox = document.getElementById('dropBox');
@@ -159,26 +171,65 @@ async function refreshTempList(){
             <div>
                 <span class="expire">剩余 ${item.left_min}分${item.left_sec}秒</span>
                 <a href="/temp/download/${item.fid}" target="_blank" style="margin-left:10px;">下载</a>
+                <button class="btn del-btn" onclick="deleteTempFile('${item.fid}')">删除</button>
             </div>
         `;
         listDom.appendChild(div);
     });
 }
 
+// 删除临时文件
+async function deleteTempFile(fid){
+    if(!confirm("确定删除此文件？")) return;
+    let res = await fetch(`/temp/delete/${fid}`, {
+        method: "POST"
+    });
+    let data = await res.json();
+    if(data.code === 0){
+        alert("删除成功");
+    }else{
+        alert("删除失败："+data.msg);
+    }
+    refreshTempList();
+}
+
 async function uploadTemp(){
+    // 防重复 + 冷却限制
+    if(isUploading){
+        alert("正在上传中，请勿重复点击！");
+        return;
+    }
+    let now = Date.now();
+    if(now - lastUploadTime < UPLOAD_COOLDOWN){
+        alert("上传过于频繁，请稍后再试！");
+        return;
+    }
     if(fileInput.files.length === 0){
         alert("请先选择或拖拽文件！");
         return;
     }
-    for(let f of fileInput.files){
-        let fd = new FormData();
-        fd.append("file", f);
-        await fetch("/temp/upload", {method:"POST", body:fd});
+
+    const btn = document.getElementById("uploadTempBtn");
+    try {
+        isUploading = true;
+        btn.disabled = true;
+        btn.innerText = "上传中...";
+
+        for(let f of fileInput.files){
+            let fd = new FormData();
+            fd.append("file", f);
+            await fetch("/temp/upload", {method:"POST", body:fd});
+        }
+        fileInput.value = "";
+        fileTip.innerText = "";
+        refreshTempList();
+        alert("上传成功！");
+        lastUploadTime = Date.now();
+    }finally{
+        isUploading = false;
+        btn.disabled = false;
+        btn.innerText = "☁️ 上传临时暂存(1小时)";
     }
-    fileInput.value = "";
-    fileTip.innerText = "";
-    refreshTempList();
-    alert("上传成功！");
 }
 
 // P2P 逻辑完全原样不动
@@ -247,7 +298,7 @@ async function loopSignal(){
         let res = await fetch("/p2p/signal/recv");
         let data = await res.json();
         if(!data.type) { 
-            await new Promise(r=>setTimeout(r,200)); 
+            await new Promise(r=>setTimeout(r,500)); 
             continue; 
         }
         if(data.type === "offer"){
