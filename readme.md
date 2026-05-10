@@ -8,6 +8,7 @@
 4. ~~AI使用~~
 5. 看板娘(你可以关闭, 基于[live2d-widget](https://github.com/stevenjoezhang/live2d-widget)做了部分适应性修改)
 6. 使用 [Flask-Humanify](https://github.com/tn3w/flask-Humanify) ~~(改不完就换是吧(⊙ˍ⊙)))~~ 进行防DDOS防护(~~主要除非你是嘉豪应该不会乱搞吧owo~~)
+7. 后台托盘静默运行
 
 ## 使用方法
 1. Star It!
@@ -29,11 +30,12 @@ python app.py [-d DIR] [-p PORT] [-t TITLE] [-host HOST]
 1. Flask
 2. Cloudflare_error_page
 3. Flask-Humanify(会下载诸如opencv和numpy)
-4. audiooop(Flask-Humanify需要,但已在Py3.11时已被弃用,你可能需要下载替代者如audioop-lts)<br>
+4. audiooop(Flask-Humanify需要,但已在Py3.11时已被弃用,你可能需要下载替代者如audioop-lts)
+5. pystray pillow waitress(后台托盘运行需要)<br>
  这些均可以通过pip安装
  运行以下即可安装:
 ```
-pip install Flask==3.0.3 Cloudflare_error_page==0.2.0 flask-Humanify==0.2.8 audioop-lts==0.2.2 audioop-lts==0.2.2
+pip install Flask==3.0.3 Cloudflare_error_page==0.2.0 flask-Humanify==0.2.8 audioop-lts==0.2.2 waitress==3.0.2 pillow==12.2.0 pystray==0.19.5
 ```
 
 ## 授权

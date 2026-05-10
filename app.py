@@ -1,23 +1,133 @@
-#719WEBF Ver.1.4 2026
+#719WEBF Ver.1.5 2026
 #Made By HZYANG+AI
 #Use https://github.com/stevenjoezhang/live2d-widget (MIT)
 
+import threading
+import pystray
+from pystray import MenuItem as item
+from PIL import Image
+import sys
+import os
+import time
+import socket
+import logging
+import webbrowser
+from logging.handlers import RotatingFileHandler
 from flask import Flask, request, jsonify, send_from_directory, render_template, render_template_string, abort, session, redirect, url_for
 import random
-import os
 import urllib.parse
 import argparse
 import datetime
 import uuid
 import json
-import time
 from cloudflare_error_page import render as render_cf_error_page
 from werkzeug.utils import secure_filename
 from threading import Lock
 
-# ===================== 【全局防 DDoS/CC 防护】最强防护，课机专用 =====================
-from flask_humanify import Humanify
+# ===================== 应用常量定义 =====================
+APP_NAME = "719WEBF"
+APP_VER  = "Ver.1.5"
+LOCK_FILE = os.path.join(os.getcwd(), "server.lock")
+LOG_DIR = "logs"
 
+# ===================== 日志系统初始化 =====================
+os.makedirs(LOG_DIR, exist_ok=True)
+log_formatter = logging.Formatter(
+    "%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+# 日志轮转：单个10MB，保留5份
+file_handler = RotatingFileHandler(
+    os.path.join(LOG_DIR, "server.log"),
+    maxBytes=10 * 1024 * 1024,
+    backupCount=5,
+    encoding="utf-8"
+)
+file_handler.setFormatter(log_formatter)
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+
+logger = logging.getLogger(APP_NAME)
+logger.setLevel(logging.INFO)
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+# ===================== 防多开 & 端口占用检测 =====================
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+def check_single_instance(port):
+    # 检测端口是否被占用
+    if is_port_in_use(port):
+        logger.error(f"端口 {port} 已被占用，禁止重复启动！")
+        sys.exit(1)
+    # 检测锁文件
+    if os.path.exists(LOCK_FILE):
+        logger.error("检测到服务已在运行，禁止多开！")
+        sys.exit(1)
+    # 写入进程PID锁
+    with open(LOCK_FILE, "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
+
+def remove_lock_file():
+    if os.path.exists(LOCK_FILE):
+        try:
+            os.remove(LOCK_FILE)
+        except Exception:
+            pass
+
+# ===================== 托盘菜单功能函数 =====================
+def tray_open_index(icon, item):
+    webbrowser.open(f"http://127.0.0.1:{SERVER_PORT}")
+
+def tray_open_transfer(icon, item):
+    webbrowser.open(f"http://127.0.0.1:{SERVER_PORT}/transfer")
+
+def tray_exit(icon, item):
+    icon.stop()
+    remove_lock_file()
+    logger.info("服务器已手动退出")
+    os._exit(0)
+
+def run_tray():
+    try:
+        # 优先加载自定义图标，无则用默认纯色
+        if os.path.exists("logo.png"):
+            icon_img = Image.open("logo.png").resize((64, 64))
+        else:
+            icon_img = Image.new('RGB', (64, 64), color=(0, 102, 204))
+
+        # 右键菜单：第一行版本标题 灰色不可点击
+        menu = pystray.Menu(
+            item(f"{APP_NAME} {APP_VER}", lambda: None, enabled=False),
+            pystray.Menu.SEPARATOR,
+            item("🌐 打开首页", tray_open_index),
+            item("📁 传输中心", tray_open_transfer),
+            pystray.Menu.SEPARATOR,
+            item("❌ 关闭服务器", tray_exit)
+        )
+
+        icon = pystray.Icon(
+            name=APP_NAME,
+            icon=icon_img,
+            title=APP_NAME,   # 鼠标悬浮只显示简称
+            menu=menu
+        )
+        icon.on_left_click = tray_open_index
+        icon.run()
+    except Exception as e:
+        logger.error(f"托盘初始化失败: {e}")
+
+# ===================== 后台服务器依赖 =====================
+try:
+    from waitress import serve
+except ImportError:
+    serve = None
+
+# ===================== 【全局防 DDoS/CC 防护】 =====================
+from flask_humanify import Humanify
 where_is_it = "The Hell Network Centre"
 
 # ========== 1. 解析命令行参数 ==========
@@ -31,25 +141,17 @@ args = parser.parse_args()
 
 app = Flask(__name__)
 app.secret_key = f"719webf_{uuid.uuid4().hex}"
-
-# ===================== 🔥 全局启用防 DDoS/CC 防护（全自动拦截恶意请求） =====================
-
-# 这是 100% 正确、不报错、官方支持的写法
+# ===================== 全局启用防 DDoS/CC 防护 =====================
 humanify = Humanify(
     app,
-    challenge_type="one_click",    # 一键验证，最舒服
+    challenge_type="one_click",
     image_dataset="animals",
-    audio_dataset="characters",  # Enable audio accessibility
-    behind_proxy=False,            # 内网必须关闭
-    use_client_id=True             # 记住访客，只验证一次
+    audio_dataset="characters",
+    behind_proxy=False,
+    use_client_id=True
 )
-
-# 保护整个网站
-humanify.register_middleware(
-    action="challenge",
-    url_patterns=["/*"],           # 全部页面都保护
-)
-
+humanify.register_middleware(action="challenge", url_patterns=["/*"])
+# ===================== 全局路径配置 =====================
 SHARE_FOLDER = os.path.abspath(args.dir)
 SERVER_PORT = args.port
 HOME_TITLE = args.title
@@ -59,7 +161,7 @@ STATIC_FOLDER = os.path.join(app.root_path, 'static')
 UPLOAD_TEMP_FOLDER = os.path.join(app.root_path, "temp_uploads")
 os.makedirs(UPLOAD_TEMP_FOLDER, exist_ok=True)
 
-# ===================== 全局存储 =====================
+# ===================== 全局内存存储 =====================
 peers = {}
 peer_lock = Lock()
 temp_files = {}
@@ -82,7 +184,7 @@ def format_size(size_bytes):
 def format_mtime(mtime):
     return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 清理过期临时文件（全局共享版） ==========
+# ========== 清理过期临时文件 ==========
 def clean_expired_files():
     now = time.time()
     expired = []
@@ -96,8 +198,7 @@ def clean_expired_files():
                 os.remove(path)
             del temp_files[fid]
 
-
-# ========== 安全路径 ==========
+# ========== 安全路径防穿越 ==========
 def get_safe_path(relative_path):
     if relative_path == '/files' or relative_path == '/files/':
         return SHARE_FOLDER
@@ -138,7 +239,6 @@ def p2p_signal_send():
     frm = session.get("p2p_uid")
     if not to or not frm:
         return jsonify({"code": 1, "msg": "参数错误"})
-    
     with peer_lock:
         if to not in signal_box:
             signal_box[to] = []
@@ -150,28 +250,13 @@ def p2p_signal_recv():
     uid = session.get("p2p_uid")
     if not uid or uid not in signal_box:
         return jsonify({})
-    
     with peer_lock:
         if len(signal_box[uid]) == 0:
             return jsonify({})
         msg = signal_box[uid].pop(0)
     return jsonify(msg)
 
-# ========== 清理过期临时文件（全局共享版） ==========
-def clean_expired_files():
-    now = time.time()
-    expired = []
-    with file_lock:
-        for fid, info in temp_files.items():
-            if now - info["upload_time"] > 3600:
-                expired.append(fid)
-        for fid in expired:
-            path = temp_files[fid]["path"]
-            if os.path.exists(path):
-                os.remove(path)
-            del temp_files[fid]
-
-# ===================== 临时上传（全局公开） =====================
+# ===================== 临时上传 =====================
 @app.route("/temp/upload", methods=["POST"])
 def temp_upload():
     clean_expired_files()
@@ -185,7 +270,6 @@ def temp_upload():
     save_path = os.path.join(UPLOAD_TEMP_FOLDER, fid)
     file.save(save_path)
     size = os.path.getsize(save_path)
-
     with file_lock:
         temp_files[fid] = {
             "name": filename,
@@ -193,28 +277,39 @@ def temp_upload():
             "path": save_path,
             "upload_time": time.time()
         }
-
     url = f"/temp/download/{fid}"
     return jsonify({"code":0,"fid":fid,"url":url,"name":filename})
 
-# ===================== 临时下载（全局公开） =====================
+# ===================== 临时下载 =====================
 @app.route("/temp/download/<fid>")
 def temp_download(fid):
     clean_expired_files()
-
-    # 全局读取，所有人可见
     with file_lock:
         info = temp_files.get(fid)
-    
     if not info:
         abort(404)
-    
     return send_from_directory(
         UPLOAD_TEMP_FOLDER,
         fid,
         as_attachment=True,
         download_name=info["name"]
     )
+
+# ===================== 临时文件删除接口 =====================
+@app.route("/temp/delete/<fid>", methods=["POST"])
+def temp_delete(fid):
+    clean_expired_files()
+    with file_lock:
+        info = temp_files.get(fid)
+        if not info:
+            return jsonify({"code":1,"msg":"文件不存在或已过期"}), 404
+        try:
+            if os.path.exists(info["path"]):
+                os.remove(info["path"])
+        except:
+            pass
+        del temp_files[fid]
+    return jsonify({"code":0,"msg":"删除成功"})
 
 @app.route("/temp/list")
 def temp_list():
@@ -234,36 +329,16 @@ def temp_list():
             })
     return jsonify({"code":0,"list":res})
 
-# ===================== 临时文件删除接口 =====================
-@app.route("/temp/delete/<fid>", methods=["POST"])
-def temp_delete(fid):
-    clean_expired_files()
-    with file_lock:
-        info = temp_files.get(fid)
-        if not info:
-            return jsonify({"code":1,"msg":"文件不存在"}), 404
-        
-        # 删除物理文件
-        try:
-            os.remove(info["path"])
-        except:
-            pass
-        # 删除记录
-        del temp_files[fid]
-    
-    return jsonify({"code":0,"msg":"删除成功"})
-
-# ===================== 传输中心 =====================
+# ===================== 传输中心 & 首页 =====================
 @app.route("/transfer")
 def transfer_page():
     return render_template("send_file.html")
 
-# ===================== 首页（自动加载 Live2D） =====================
 @app.route("/")
 def index():
     return render_template("index.html", title=HOME_TITLE)
 
-# ========== 文件共享 ==========
+# ========== 文件共享目录浏览 ==========
 @app.route('/files/', defaults={'relative_path': ''})
 @app.route('/files/<path:relative_path>')
 def serve_directory(relative_path):
@@ -299,7 +374,7 @@ def serve_directory(relative_path):
     else:
         abort(404)
 
-# ========== 目录模板 ==========
+# ========== 目录页面模板 ==========
 DIRECTORY_TEMPLATE = '''
 <!DOCTYPE HTML>
 <html>
@@ -350,14 +425,33 @@ def error_418(e):
     error_params = {"title":"418 I'm a Teapot","error_code":418,"browser_status":{"status":"ok"},"host_status":{"status":"error","location":request.host,"status_text":"Teapot"},"cloudflare_status":{"status":"error","location":where_is_it,"status_text":"Teapot"},"error_source":"cloudflare","what_happened":"服务器不能煮咖啡因为它是一把茶壶 (qwq)","what_can_i_do":"去另寻一台咖啡机吧awa"}
     return render_cf_error_page(error_params), 418
 
-# ========== 启动 ==========
+# ===================== 后台启动Flask =====================
+def start_flask_server():
+    if serve:
+        serve(app, host=SERVER_HOST, port=SERVER_PORT)
+    else:
+        app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False, use_reloader=False)
+
+# ========== 主程序入口 ==========
 if __name__ == '__main__':
-    print("="*50)
-    print("719WEBF 已启用防 DDoS/CC 全局防护")
-    print("="*50)
-    print(f"✅ 共享目录：{SHARE_FOLDER}")
-    print(f"✅ 访问首页：http://127.0.0.1:{SERVER_PORT}")
-    print(f"✅ 文件共享：http://127.0.0.1:{SERVER_PORT}/files/")
-    print(f"✅ 传输中心：http://127.0.0.1:{SERVER_PORT}/transfer")
-    print("="*50)
-    app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False)
+    # 1. 先检测防多开、端口占用
+    check_single_instance(SERVER_PORT)
+    logger.info(f"{APP_NAME} {APP_VER} 正在启动...")
+    logger.info(f"共享目录: {SHARE_FOLDER} | 端口: {SERVER_PORT} | 绑定IP: {SERVER_HOST}")
+
+    # 2. 后台启动托盘
+    tray_thread = threading.Thread(target=run_tray, daemon=True)
+    tray_thread.start()
+
+    # 3. 子线程启动Flask服务
+    flask_thread = threading.Thread(target=start_flask_server, daemon=True)
+    flask_thread.start()
+
+    # 主线程常驻
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("检测到手动终止，正在退出...")
+        remove_lock_file()
+        os._exit(0)

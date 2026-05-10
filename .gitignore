@@ -2,8 +2,11 @@
 
 server_uploads/
 temp_uploads/
+logs/
 
 *.bat
+*.vbs
+*.lock
 
 LICENSE
 
