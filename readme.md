@@ -61,5 +61,8 @@ https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_cn.htm
 Live2D Cubism Components は Live2D Open Software License で提供しています。
 https://www.live2d.com/eula/live2d-open-software-license-agreement_cn.html
 
+# 支持
+由[Fony Yu](https://github.com/FonyMC)为**HZYANG**提供情绪价值。
+
 ***
 HZYANG 2026
