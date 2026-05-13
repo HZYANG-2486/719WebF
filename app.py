@@ -5,7 +5,7 @@
 import threading
 import pystray
 from pystray import MenuItem as item
-from PIL import Image
+from PIL import Image, ImageTk
 import sys
 import os
 import time
@@ -14,21 +14,181 @@ import logging
 import webbrowser
 from logging.handlers import RotatingFileHandler
 from flask import Flask, request, jsonify, send_from_directory, render_template, render_template_string, abort, session, redirect, url_for
-import random
 import urllib.parse
-import argparse
 import datetime
 import uuid
 import json
 from cloudflare_error_page import render as render_cf_error_page
 from werkzeug.utils import secure_filename
 from threading import Lock
+import xml.etree.ElementTree as ET
+# 内置GUI
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
 
 # ===================== 应用常量定义 =====================
 APP_NAME = "719WEBF"
 APP_VER  = "Ver.1.5"
 LOCK_FILE = os.path.join(os.getcwd(), "server.lock")
 LOG_DIR = "logs"
+CONFIG_FILE = "config.xml"
+
+# ===================== 第一次启动      =====================
+
+def show_image_right_bottom(image_path: str, display_sec: int = 5, scale_ratio: float = 1.0):
+    """
+    屏幕右下角显示图片窗口，定时自动关闭，支持等比例缩放
+    :param image_path: 图片路径
+    :param display_sec: 显示秒数
+    :param scale_ratio: 缩放比例，1.0=原图，0.5=缩小一半，1.5=放大1.5倍
+    """
+    if not os.path.exists(image_path):
+        print(f"图片不存在: {image_path}")
+        return
+
+    # 创建无边框置顶窗口
+    root = tk.Tk()
+    root.overrideredirect(True)
+    root.attributes("-topmost", True)
+
+    # 打开图片 + 等比例缩放
+    img = Image.open(image_path)
+    w, h = img.size
+    # 计算缩放后尺寸
+    new_w = int(w * scale_ratio)
+    new_h = int(h * scale_ratio)
+    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    photo = ImageTk.PhotoImage(img)
+
+    # 屏幕尺寸 + 计算右下角位置
+    sw = root.winfo_screenwidth()
+    sh = root.winfo_screenheight()
+    x = sw - new_w
+    y = sh - new_h
+
+    root.geometry(f"{new_w}x{new_h}+{x}+{y}")
+
+    # 显示图片
+    tk.Label(root, image=photo).pack()
+    # 防止图片被垃圾回收
+    root.photo = photo
+
+    # 定时关闭
+    root.after(display_sec * 1000, root.destroy)
+    root.mainloop()
+
+# ===================== XML配置读写 =====================
+def create_default_config():
+    show_image_right_bottom("startus.png", 5, 0.5)
+    root = ET.Element("config")
+    ET.SubElement(root, "share_dir").text = "."
+    ET.SubElement(root, "port").text = "5000"
+    ET.SubElement(root, "title").text = "文件共享服务"
+    ET.SubElement(root, "host").text = "0.0.0.0"
+    tree = ET.ElementTree(root)
+    with open(CONFIG_FILE, "wb") as f:
+        tree.write(f, encoding="utf-8", xml_declaration=True)
+
+def load_config():
+    if not os.path.exists(CONFIG_FILE):
+        create_default_config()
+    try:
+        tree = ET.parse(CONFIG_FILE)
+        root = tree.getroot()
+        cfg = {
+            "share_dir": root.findtext("share_dir", "."),
+            "port": int(root.findtext("port", "5000")),
+            "title": root.findtext("title", "文件共享服务"),
+            "host": root.findtext("host", "0.0.0.0")
+        }
+        if not os.path.isdir(cfg["share_dir"]):
+            cfg["share_dir"] = "."
+        return cfg
+    except:
+        create_default_config()
+        return load_config()
+
+def save_config(share_dir, port, title, host):
+    root = ET.Element("config")
+    ET.SubElement(root, "share_dir").text = share_dir
+    ET.SubElement(root, "port").text = str(port)
+    ET.SubElement(root, "title").text = title
+    ET.SubElement(root, "host").text = host
+    tree = ET.ElementTree(root)
+    with open(CONFIG_FILE, "wb") as f:
+        tree.write(f, encoding="utf-8", xml_declaration=True)
+
+# 全局配置
+CONFIG = load_config()
+
+# ===================== 独立GUI设置窗口 =====================
+class SettingsGUI(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title(f"{APP_NAME} {APP_VER} 设置")
+        self.geometry("520x320")
+        self.resizable(False, False)
+        self.configure(bg="#f0f0f0")
+        self.cfg = load_config()
+        self.create_widgets()
+
+    def create_widgets(self):
+        # 共享目录
+        ttk.Label(self, text="共享目录", font=("微软雅黑",10)).place(x=20, y=20)
+        self.var_dir = tk.StringVar(value=self.cfg["share_dir"])
+        ttk.Entry(self, textvariable=self.var_dir, width=55).place(x=20, y=50)
+        ttk.Button(self, text="选择文件夹", command=self.select_dir).place(x=420, y=48)
+
+        # 端口
+        ttk.Label(self, text="服务端口 (1-65535)", font=("微软雅黑",10)).place(x=20, y=90)
+        self.var_port = tk.StringVar(value=str(self.cfg["port"]))
+        ttk.Entry(self, textvariable=self.var_port, width=30).place(x=20, y=120)
+
+        # 首页标题
+        ttk.Label(self, text="网页首页标题", font=("微软雅黑",10)).place(x=20, y=160)
+        self.var_title = tk.StringVar(value=self.cfg["title"])
+        ttk.Entry(self, textvariable=self.var_title, width=55).place(x=20, y=190)
+
+        # 绑定IP
+        ttk.Label(self, text="绑定IP (0.0.0.0=允许局域网)", font=("微软雅黑",10)).place(x=20, y=230)
+        self.var_host = tk.StringVar(value=self.cfg["host"])
+        ttk.Entry(self, textvariable=self.var_host, width=30).place(x=20, y=260)
+
+        # 保存按钮
+        ttk.Button(self, text="保存配置", command=self.save).place(x=380, y=258)
+
+    def select_dir(self):
+        path = filedialog.askdirectory(title="选择共享文件夹")
+        if path:
+            self.var_dir.set(path)
+
+    def save(self):
+        share_dir = self.var_dir.get().strip()
+        port_str = self.var_port.get().strip()
+        title = self.var_title.get().strip()
+        host = self.var_host.get().strip()
+
+        # 校验
+        if not os.path.isdir(share_dir):
+            messagebox.showerror("错误", "共享目录不存在！")
+            return
+        if not port_str.isdigit():
+            messagebox.showerror("错误", "端口必须为数字！")
+            return
+        port = int(port_str)
+        if port < 1 or port > 65535:
+            messagebox.showerror("错误", "端口范围 1~65535")
+            return
+
+        save_config(share_dir, port, title, host)
+        messagebox.showinfo("成功", "配置已保存！\n请重启服务生效")
+        self.destroy()
+
+def open_settings_gui():
+    """唤起设置GUI窗口"""
+    app = SettingsGUI()
+    app.mainloop()
 
 # ===================== 日志系统初始化 =====================
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -36,7 +196,6 @@ log_formatter = logging.Formatter(
     "%(asctime)s | %(levelname)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
-# 日志轮转：单个10MB，保留5份
 file_handler = RotatingFileHandler(
     os.path.join(LOG_DIR, "server.log"),
     maxBytes=10 * 1024 * 1024,
@@ -59,15 +218,12 @@ def is_port_in_use(port):
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 def check_single_instance(port):
-    # 检测端口是否被占用
     if is_port_in_use(port):
         logger.error(f"端口 {port} 已被占用，禁止重复启动！")
         sys.exit(1)
-    # 检测锁文件
     if os.path.exists(LOCK_FILE):
         logger.error("检测到服务已在运行，禁止多开！")
         sys.exit(1)
-    # 写入进程PID锁
     with open(LOCK_FILE, "w", encoding="utf-8") as f:
         f.write(str(os.getpid()))
 
@@ -78,12 +234,16 @@ def remove_lock_file():
         except Exception:
             pass
 
-# ===================== 托盘菜单功能函数 =====================
+# ===================== 托盘菜单功能 =====================
 def tray_open_index(icon, item):
-    webbrowser.open(f"http://127.0.0.1:{SERVER_PORT}")
+    webbrowser.open(f"http://127.0.0.1:{CONFIG['port']}")
 
 def tray_open_transfer(icon, item):
-    webbrowser.open(f"http://127.0.0.1:{SERVER_PORT}/transfer")
+    webbrowser.open(f"http://127.0.0.1:{CONFIG['port']}/transfer")
+
+def tray_open_settings(icon, item):
+    # 托盘右键唤起独立GUI设置
+    threading.Thread(target=open_settings_gui, daemon=True).start()
 
 def tray_exit(icon, item):
     icon.stop()
@@ -93,18 +253,18 @@ def tray_exit(icon, item):
 
 def run_tray():
     try:
-        # 优先加载自定义图标，无则用默认纯色
         if os.path.exists("logo.png"):
             icon_img = Image.open("logo.png").resize((64, 64))
         else:
             icon_img = Image.new('RGB', (64, 64), color=(0, 102, 204))
 
-        # 右键菜单：第一行版本标题 灰色不可点击
+        # 托盘菜单：加入独立设置入口
         menu = pystray.Menu(
             item(f"{APP_NAME} {APP_VER}", lambda: None, enabled=False),
             pystray.Menu.SEPARATOR,
             item("🌐 打开首页", tray_open_index),
             item("📁 传输中心", tray_open_transfer),
+            item("⚙️ 程序设置", tray_open_settings),
             pystray.Menu.SEPARATOR,
             item("❌ 关闭服务器", tray_exit)
         )
@@ -112,7 +272,7 @@ def run_tray():
         icon = pystray.Icon(
             name=APP_NAME,
             icon=icon_img,
-            title=APP_NAME,   # 鼠标悬浮只显示简称
+            title=APP_NAME,
             menu=menu
         )
         icon.on_left_click = tray_open_index
@@ -126,22 +286,13 @@ try:
 except ImportError:
     serve = None
 
-# ===================== 【全局防 DDoS/CC 防护】 =====================
+# ===================== 防 DDoS/CC 防护 =====================
 from flask_humanify import Humanify
 where_is_it = "The Hell Network Centre"
 
-# ========== 1. 解析命令行参数 ==========
-parser = argparse.ArgumentParser(description='Flask 文件共享服务器（带自定义首页）')
-parser.add_argument('-d', '--dir', default='.', help='指定共享文件夹路径（默认：当前目录）')
-parser.add_argument('-p', '--port', type=int, default=5000, help='指定服务器端口号（默认：5000）')
-parser.add_argument('-t', '--title', default='文件共享服务', help='自定义首页标题（默认：文件共享服务）')
-parser.add_argument('-host', default='0.0.0.0', help='指定绑定的IP地址（默认：0.0.0.0，允许局域网访问）')
-
-args = parser.parse_args()
-
+# ===================== Flask初始化 =====================
 app = Flask(__name__)
 app.secret_key = f"719webf_{uuid.uuid4().hex}"
-# ===================== 全局启用防 DDoS/CC 防护 =====================
 humanify = Humanify(
     app,
     challenge_type="one_click",
@@ -151,11 +302,12 @@ humanify = Humanify(
     use_client_id=True
 )
 humanify.register_middleware(action="challenge", url_patterns=["/*"])
+
 # ===================== 全局路径配置 =====================
-SHARE_FOLDER = os.path.abspath(args.dir)
-SERVER_PORT = args.port
-HOME_TITLE = args.title
-SERVER_HOST = args.host
+SHARE_FOLDER = os.path.abspath(CONFIG["share_dir"])
+SERVER_PORT = CONFIG["port"]
+HOME_TITLE = CONFIG["title"]
+SERVER_HOST = CONFIG["host"]
 
 STATIC_FOLDER = os.path.join(app.root_path, 'static')
 UPLOAD_TEMP_FOLDER = os.path.join(app.root_path, "temp_uploads")
@@ -434,16 +586,21 @@ def start_flask_server():
 
 # ========== 主程序入口 ==========
 if __name__ == '__main__':
-    # 1. 先检测防多开、端口占用
+    # 单独只开设置GUI
+    if len(sys.argv) > 1 and sys.argv[1] == "--gui":
+        open_settings_gui()
+        sys.exit()
+
+    # 正常启动服务
     check_single_instance(SERVER_PORT)
     logger.info(f"{APP_NAME} {APP_VER} 正在启动...")
     logger.info(f"共享目录: {SHARE_FOLDER} | 端口: {SERVER_PORT} | 绑定IP: {SERVER_HOST}")
 
-    # 2. 后台启动托盘
+    # 托盘线程
     tray_thread = threading.Thread(target=run_tray, daemon=True)
     tray_thread.start()
 
-    # 3. 子线程启动Flask服务
+    # Flask服务线程
     flask_thread = threading.Thread(target=start_flask_server, daemon=True)
     flask_thread.start()
 
