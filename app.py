@@ -5,7 +5,7 @@
 import threading
 import pystray
 from pystray import MenuItem as item
-from PIL import Image
+from PIL import Image, ImageTk
 import sys
 import os
 import time
