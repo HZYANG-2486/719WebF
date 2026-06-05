@@ -296,13 +296,23 @@ def clean_expired_files():
             del temp_files[fid]
 
 def get_safe_path(relative_path):
-    if relative_path in ['/files', '/files/']:
+    # 剔除路由前缀 /files/
+    prefix = "/files/"
+    if relative_path.startswith(prefix):
+        rel = relative_path[len(prefix):]
+    else:
+        rel = ""
+    # 空路径返回根共享目录
+    if not rel.strip("/"):
         return SHARE_FOLDER
-    clean = relative_path.lstrip('/files/')
-    target = os.path.normpath(os.path.join(SHARE_FOLDER, clean))
-    if not target.startswith(SHARE_FOLDER):
+    # 安全拼接，禁止..穿越
+    rel = os.path.normpath(rel).replace("..", "")
+    target_path = os.path.abspath(os.path.join(SHARE_FOLDER, rel))
+    # 严格前缀校验
+    share_abs = os.path.abspath(SHARE_FOLDER)
+    if not target_path.startswith(share_abs):
         abort(403)
-    return target
+    return target_path
 
 # ===================== 路由（完全保留原有功能） =====================
 @app.route("/live2d/<path:filename>")
@@ -421,12 +431,20 @@ def serve_directory(relative_path):
     dirs = sorted([i for i in items if os.path.isdir(os.path.join(target,i))])
     files = sorted([i for i in items if os.path.isfile(os.path.join(target,i))])
     for i in dirs:
-        data["items"].append({"name":i,"url":urllib.parse.quote(f'/files/{os.path.join(relative_path,i)}'),"is_dir":True,"size":"","mtime":""})
+        data["items"].append({
+            "name":i,
+            "url": "/files/" + urllib.parse.quote(os.path.join(relative_path,i), safe="/"),
+            "is_dir":True,"size":"","mtime":""
+        })
     for i in files:
         p = os.path.join(target,i)
         s = os.path.getsize(p)
         m = os.path.getmtime(p)
-        data["items"].append({"name":i,"url":urllib.parse.quote(f'/files/{os.path.join(relative_path,i)}'),"is_dir":False,"size":format_size(s),"mtime":format_mtime(m)})
+        data["items"].append({
+            "name":i,
+            "url": "/files/" + urllib.parse.quote(os.path.join(relative_path,i), safe="/"),
+            "is_dir":False,"size":format_size(s),"mtime":format_mtime(m)
+        })
     return render_template_string('''
 <!DOCTYPE HTML><html><head><meta charset="utf-8"><title>目录：{{ path }}</title>
 <style>body{font-family:sans-serif;padding:20px;}ul{list-style:none;padding:0;}li{display:flex;justify-content:space-between;padding:6px 0;}a{flex:1;text-decoration:none;color:#0066cc;}a:hover{text-decoration:underline;}.file-info{color:#666;font-size:13px;}</style></head>
@@ -451,7 +469,6 @@ def error_500(e):
 def error_418(e):
     error_params = {"title":"418 I'm a Teapot","error_code":418,"browser_status":{"status":"ok"},"host_status":{"status":"error","location":request.host,"status_text":"Teapot"},"cloudflare_status":{"status":"error","location":where_is_it,"status_text":"Teapot"},"error_source":"cloudflare","what_happened":"服务器不能煮咖啡因为它是一把茶壶 (qwq)","what_can_i_do":"去另寻一台咖啡机吧awa"}
     return render_cf_error_page(error_params), 418
-
 
 # ===================== 启动服务 =====================
 def start_flask_server():

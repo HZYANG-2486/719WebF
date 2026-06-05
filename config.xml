@@ -1,0 +1,2 @@
+<?xml version='1.0' encoding='utf-8'?>
+<config><share_dir>.</share_dir><port>5000</port><title>文件共享服务</title><host>0.0.0.0</host></config>
