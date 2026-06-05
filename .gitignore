@@ -7,6 +7,7 @@ logs/
 *.bat
 *.vbs
 *.lock
+*.xml
 
 LICENSE
 
