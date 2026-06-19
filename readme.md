@@ -1,6 +1,14 @@
 # 719WebF
 一个在班级以内共享文件的服务...
 
+<img src='https://badgen.net/badge/icon/Python?icon=python&label'></img>
+<img src='https://badgen.net/static/Protected%20By/Flask-Humanify/orange'></img>
+<img src='https://badgen.net/static/Powered%20By/Flask/blue'></img><br>
+<img src='https://badgen.net/github/license/HZYANG-2486/719WebF'></img>
+<img src='https://badgen.net/github/releases/HZYANG-2486/719WebF'></img>
+<img src='https://badgen.net/github/tag/HZYANG-2486/719WebF'></img>
+<!--生草的加了点东西 -->
+
 ## 特性
 1. ~~氢量~~化
 2. 文件互传(暂存/WebRTC)
@@ -82,7 +90,7 @@ https://www.live2d.com/eula/live2d-open-software-license-agreement_cn.html
 
 # 支持
 由[Fony Yu](https://github.com/FonyMC)为**HZYANG**提供情绪价值。<br>
-🤣👆(HZ的笑)
+🤣👆(笑)
 
 ***
 HZYANG 2026
