@@ -1,238 +1,597 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{title}} | 传输中心</title>
     <style>
         *{box-sizing:border-box;margin:0;padding:0;}
-        body{max-width:800px;margin:20px auto;font-family:"Microsoft Yahei",Arial;padding:0 15px;line-height:1.6;}
-        h1{text-align:center;color:#222;margin-bottom:25px;font-size:24px;}
-        .card{border:1px solid #e5e7eb;border-radius:12px;padding:20px;margin-bottom:20px;background:#fff;}
-        .card h2{font-size:18px;color:#1f2937;margin-bottom:15px;border-left:4px solid #0066cc;padding-left:10px;}
+        body{
+            font-family:"PingFang SC","Microsoft Yahei","Segoe UI",Arial,sans-serif;
+            min-height:100vh;
+            background:linear-gradient(180deg,#f5f7fb 0%,#eef2f9 100%);
+            -webkit-font-smoothing:antialiased;
+            color:#1e293b;
+        }
 
-        /* 拖拽文件区域 */
+        /* ===== 头部 ===== */
+        .page-header{
+            background:linear-gradient(135deg,#0066cc 0%,#0052a3 50%,#0066cc 100%);
+            background-size:200% 200%;
+            animation:headerGradient 8s ease infinite;
+            color:#fff;
+            padding:24px 32px;
+            box-shadow:0 2px 16px rgba(0,102,204,0.2);
+            position:relative;
+            overflow:hidden;
+        }
+        @media (min-width: 768px) {
+            .page-header { padding-left: 32px; }
+        }
+        @keyframes headerGradient{0%{background-position:0% 50%;}50%{background-position:100% 50%;}100%{background-position:0% 50%;}}
+        .page-header::before{
+            content:'';position:absolute;top:-50%;right:-10%;width:300px;height:300px;
+            background:radial-gradient(circle,rgba(255,255,255,0.1) 0%,transparent 70%);border-radius:50%;
+        }
+        .page-header h1{font-size:22px;font-weight:600;display:flex;align-items:center;gap:10px;position:relative;z-index:1;}
+        .page-header .subtitle{font-size:13px;opacity:0.85;margin-top:6px;position:relative;z-index:1;}
+
+        /* ===== 容器 ===== */
+        .container{max-width:680px;margin:0 auto;padding:24px 20px 0;}
+        /* ===== 步骤指示器 ===== */
+        .steps{display:flex;align-items:center;justify-content:center;gap:0;margin-bottom:28px;flex-wrap:wrap;}
+        .step-dot{
+            width:36px;height:36px;border-radius:50%;background:#e2e8f0;color:#94a3b8;
+            display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;
+            transition:background 0.3s,color 0.3s,box-shadow 0.3s;flex-shrink:0;
+        }
+        .step-dot.active{background:linear-gradient(135deg,#0066cc 0%,#0052a3 100%);color:#fff;box-shadow:0 2px 8px rgba(0,102,204,0.3);}
+        .step-dot.done{background:#10b981;color:#fff;}
+        .step-label{font-size:13px;color:#94a3b8;font-weight:500;margin:0 12px;transition:color 0.3s;}
+        .step-label.active{color:#0066cc;}
+        .step-label.done{color:#10b981;}
+        .step-line{width:32px;height:2px;background:#e2e8f0;transition:background 0.3s;flex-shrink:0;}
+        .step-line.done{background:#10b981;}
+
+        /* ===== 卡片面板 ===== */
+        .panel{
+            background:#fff;border:1px solid #e8ecf1;border-radius:16px;padding:32px 28px;
+            box-shadow:0 4px 24px rgba(0,0,0,0.04);
+            animation:panelFadeIn 0.4s ease-out;
+        }
+        @keyframes panelFadeIn{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:translateY(0);}}
+        .panel-title{font-size:18px;font-weight:600;color:#1e293b;margin-bottom:6px;}
+        .panel-desc{font-size:13px;color:#94a3b8;margin-bottom:24px;}
+
+        /* ===== 角色选择卡片 ===== */
+        .role-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+        @media(max-width:560px){.role-grid{grid-template-columns:1fr;}}
+        .role-card{
+            border:2px solid #e8ecf1;border-radius:14px;padding:28px 20px;text-align:center;
+            cursor:pointer;background:#fafbfc;transition:border-color 0.25s,background 0.25s,transform 0.25s,box-shadow 0.25s;
+        }
+        .role-card:hover{border-color:#0066cc;background:#f0f7ff;transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,102,204,0.08);}
+        .role-card.selected{border-color:#0066cc;background:linear-gradient(135deg,#f0f7ff 0%,#e6f0ff 100%);box-shadow:0 4px 12px rgba(0,102,204,0.12);}
+        .role-icon{font-size:40px;margin-bottom:12px;}
+        .role-name{font-size:15px;font-weight:600;color:#334155;}
+        .role-desc{font-size:12px;color:#94a3b8;margin-top:6px;}
+
+        /* ===== 方式选择卡片 ===== */
+        .method-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+        @media(max-width:560px){.method-grid{grid-template-columns:1fr;}}
+        .method-card{
+            border:2px solid #e8ecf1;border-radius:14px;padding:24px 18px;cursor:pointer;
+            background:#fafbfc;transition:border-color 0.25s,background 0.25s,transform 0.25s,box-shadow 0.25s;
+        }
+        .method-card:hover{border-color:#0066cc;background:#f0f7ff;transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,102,204,0.08);}
+        .method-card.selected{border-color:#0066cc;background:linear-gradient(135deg,#f0f7ff 0%,#e6f0ff 100%);box-shadow:0 4px 12px rgba(0,102,204,0.12);}
+        .method-icon{font-size:32px;margin-bottom:10px;}
+        .method-name{font-size:14px;font-weight:600;color:#334155;margin-bottom:4px;}
+        .method-desc{font-size:12px;color:#94a3b8;line-height:1.5;}
+
+        /* ===== 拖拽区 ===== */
         .drop-box{
-            border:2px dashed #0066cc;
-            border-radius:10px;
-            padding:40px 20px;
-            text-align:center;
-            cursor:pointer;
-            background:#f8fafc;
-            transition:all 0.2s;
+            border:2px dashed #cbd5e1;border-radius:12px;padding:40px 20px;text-align:center;
+            cursor:pointer;background:linear-gradient(180deg,#fafbfc 0%,#f8fafc 100%);
+            transition:border-color 0.3s,background 0.3s,transform 0.3s,box-shadow 0.3s;
+            position:relative;overflow:hidden;font:inherit;color:inherit;width:100%;display:block;
         }
-        .drop-box.active{background:#e6f0ff;border-color:#0052a3;}
-        .drop-box p{color:#666;margin-top:8px;}
-        .file-tip{margin-top:12px;text-align:center;color:#2c3e50;font-weight:bold;}
+        .drop-box:hover{border-color:#0066cc;background:linear-gradient(180deg,#f0f7ff 0%,#e6f0ff 100%);transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,102,204,0.08);}
+        .drop-box.active{border-color:#0066cc;background:linear-gradient(180deg,#e6f0ff 0%,#f0f7ff 100%);border-style:solid;transform:scale(1.01);box-shadow:0 6px 20px rgba(0,102,204,0.12);}
+        .drop-icon{font-size:42px;margin-bottom:12px;animation:float 3s ease-in-out infinite;}
+        @keyframes float{0%,100%{transform:translateY(0);}50%{transform:translateY(-6px);}}
+        .drop-title{font-size:15px;font-weight:600;color:#334155;}
+        .drop-box p{color:#94a3b8;margin-top:6px;font-size:13px;}
         input[type="file"]{display:none;}
+        .file-tip{
+            margin-top:16px;text-align:center;padding:12px 16px;
+            background:linear-gradient(135deg,#f0f7ff 0%,#e6f0ff 100%);border:1px solid #cce5ff;
+            border-radius:8px;color:#0066cc;font-size:13px;font-weight:500;display:none;animation:slideDown 0.3s ease-out;
+        }
+        .file-tip:not(:empty){display:block;}
+        @keyframes slideDown{from{opacity:0;transform:translateY(-8px);}to{opacity:1;transform:translateY(0);}}
 
-        /* 按钮样式 */
+        /* ===== 按钮 ===== */
         .btn{
-            background:#0066cc;color:#fff;border:none;
-            padding:10px 20px;border-radius:6px;
-            cursor:pointer;font-size:14px;margin:6px 4px;
+            background:linear-gradient(135deg,#0066cc 0%,#0052a3 100%);color:#fff;border:none;
+            padding:12px 28px;border-radius:10px;cursor:pointer;font-size:14px;font-weight:600;
+            transition:background 0.25s,transform 0.25s,box-shadow 0.25s,opacity 0.25s;
+            display:inline-flex;align-items:center;gap:6px;box-shadow:0 2px 8px rgba(0,102,204,0.2);
         }
-        .btn:hover{background:#0052a3;}
-        .btn:disabled{background:#94a3b8;cursor:not-allowed;}
+        .btn:hover{background:linear-gradient(135deg,#0052a3 0%,#004499 100%);transform:translateY(-1px);box-shadow:0 4px 14px rgba(0,102,204,0.3);}
+        .btn:active{transform:translateY(0);}
+        .btn:disabled{background:#94a3b8;cursor:not-allowed;transform:none;box-shadow:none;opacity:0.7;}
+        .btn-secondary{background:#fff;color:#475569;border:1px solid #e2e8f0;box-shadow:0 1px 2px rgba(0,0,0,0.04);}
+        .btn-secondary:hover{background:#f8fafc;color:#334155;border-color:#cbd5e1;box-shadow:0 2px 6px rgba(0,0,0,0.06);}
+        .btn-danger{background:linear-gradient(135deg,#ef4444 0%,#dc2626 100%);box-shadow:0 2px 8px rgba(239,68,68,0.2);padding:7px 14px;font-size:12px;}
+        .btn-danger:hover{background:linear-gradient(135deg,#dc2626 0%,#b91c1c 100%);}
+        .btn-sm{padding:8px 16px;font-size:13px;}
 
-        .del-btn{
-            background:#dc3545;
-            padding:6px 10px;
-            font-size:12px;
+        .btn-row{display:flex;gap:12px;justify-content:space-between;align-items:center;margin-top:24px;flex-wrap:wrap;}
+
+        /* ===== P2P 状态 ===== */
+        .info-box{background:#fafbfc;border:1px solid #e8ecf1;border-radius:10px;padding:16px;margin-bottom:16px;}
+        .info-label{font-size:12px;font-weight:600;color:#64748b;margin-bottom:8px;display:flex;align-items:center;gap:6px;}
+        .info-label .dot{width:6px;height:6px;border-radius:50%;background:#0066cc;}
+        .info-value{font-size:14px;color:#334155;padding:8px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;min-height:40px;display:flex;align-items:center;}
+        .select-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+        .select-row label{font-size:13px;color:#475569;font-weight:500;}
+        .select-row select{flex:1;min-width:150px;padding:9px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;color:#334155;background:#fff;cursor:pointer;transition:border-color 0.2s,box-shadow 0.2s;}
+        .select-row select:focus{outline:none;border-color:#0066cc;box-shadow:0 0 0 3px rgba(0,102,204,0.08);}
+
+        .status-row{padding:12px 16px;border-radius:8px;font-size:13px;font-weight:500;display:flex;align-items:center;gap:8px;margin:16px 0;}
+        .status-row.red{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;}
+        .status-row.green{background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;}
+
+        /* ===== 进度条 ===== */
+        .progress{width:100%;height:10px;background:#f1f5f9;border-radius:5px;margin:16px 0;overflow:hidden;position:relative;}
+        .progress-bar{height:100%;background:linear-gradient(90deg,#0066cc 0%,#0099ff 50%,#0066cc 100%);background-size:200% 100%;width:0%;transition:width 0.3s ease;border-radius:5px;position:relative;}
+        .progress-bar::after{content:'';position:absolute;top:0;left:0;right:0;bottom:0;background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,0.3) 50%,transparent 100%);animation:progressShine 2s ease-in-out infinite;}
+        @keyframes progressShine{0%{transform:translateX(-100%);}100%{transform:translateX(100%);}}
+
+        /* ===== 接收列表 ===== */
+        .recv-list{margin-top:8px;}
+        .recv-list a{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:linear-gradient(135deg,#f0f7ff 0%,#e6f0ff 100%);border:1px solid #cce5ff;border-radius:8px;color:#0066cc;text-decoration:none;font-size:13px;font-weight:500;transition:background 0.2s,border-color 0.2s,transform 0.2s;margin-top:8px;}
+        .recv-list a:hover{background:linear-gradient(135deg,#e6f0ff 0%,#f0f7ff 100%);border-color:#0066cc;transform:translateY(-1px);}
+
+        /* ===== 文件列表 ===== */
+        .item{padding:14px 16px;border:1px solid #e8ecf1;border-radius:10px;display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;background:#fff;transition:border-color 0.2s,box-shadow 0.2s,transform 0.2s;animation:itemFadeIn 0.3s ease-out;}
+        @keyframes itemFadeIn{from{opacity:0;transform:translateX(-8px);}to{opacity:1;transform:translateX(0);}}
+        .item:hover{border-color:#cbd5e1;box-shadow:0 2px 8px rgba(0,0,0,0.04);transform:translateX(2px);}
+        .item-name{font-size:14px;color:#334155;font-weight:500;display:flex;align-items:center;gap:8px;min-width:0;flex:1;}
+        .item-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+        .item-actions{display:flex;align-items:center;gap:10px;flex-shrink:0;margin-left:12px;}
+        .expire{color:#94a3b8;font-size:12px;}
+        .item-actions a{color:#0066cc;text-decoration:none;font-size:13px;font-weight:500;padding:6px 12px;background:#f0f7ff;border-radius:6px;transition:background 0.2s;}
+        .item-actions a:hover{background:#e6f0ff;}
+        .empty-state{text-align:center;padding:40px 20px;color:#94a3b8;}
+        .empty-state-icon{font-size:48px;margin-bottom:12px;opacity:0.5;}
+
+        /* ===== 返回链接 ===== */
+        .back-link{display:inline-flex;align-items:center;gap:6px;color:#64748b;text-decoration:none;font-size:14px;padding:10px 18px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;transition:color 0.2s,border-color 0.2s,background 0.2s,transform 0.2s;margin-top:16px;}
+        .back-link:hover{color:#0066cc;border-color:#0066cc;background:#f0f7ff;transform:translateX(-2px);}
+
+        /* ===== 可见性控制 ===== */
+        .step-page{display:none;}
+        .step-page.active{display:block;}
+
+        @media(prefers-reduced-motion:reduce){
+            *{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important;}
         }
-        .del-btn:hover{background:#b02a37;}
-
-        .row{margin:12px 0;}
-        .gray-text{color:#666;font-size:14px;}
-        .red{color:red;}
-        .green{color:green;}
-
-        /* 进度条 */
-        .progress{width:100%;height:10px;background:#eee;border-radius:5px;margin:15px 0;overflow:hidden;}
-        .progress-bar{height:100%;background:#28a745;width:0%;transition:0.2s;}
-
-        .item{padding:10px 0;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;}
-        .expire{color:#999;font-size:13px;}
-        a{color:#0066cc;text-decoration:none;}
-        .back{margin-top:20px;display:inline-block;color:#666;}
     </style>
 </head>
 <body>
-    <h1>📁 传输中心</h1>
+    <div class="page-header">
+        <h1>📁 传输中心</h1>
+        <div class="subtitle">快速、安全的文件传输工具</div>
+    </div>
 
-    <!-- 统一文件选择区 -->
-    <div class="card">
-        <h2>第一步：选择 / 拖拽文件</h2>
-        <div id="dropBox" class="drop-box">
-            <div>点击此处 或 拖拽文件到这里</div>
-            <p>支持任意格式文件</p>
-            <input type="file" id="fileInput" multiple>
+    <div class="container">
+        <!-- 步骤指示器 -->
+        <div class="steps" id="stepIndicator">
+            <div class="step-dot active" id="dot1">1</div>
+            <span class="step-label active" id="label1">选择角色</span>
+            <div class="step-line" id="line1"></div>
+            <div class="step-dot" id="dot2">2</div>
+            <span class="step-label" id="label2">选择方式</span>
+            <div class="step-line" id="line2"></div>
+            <div class="step-dot" id="dot3">3</div>
+            <span class="step-label" id="label3">执行传输</span>
         </div>
-        <div class="file-tip" id="fileTip"></div>
 
-        <div style="text-align:center;margin-top:18px;">
-            <button class="btn" onclick="sendP2P()" disabled id="btnP2P">📡 发给对方(面对面)</button>
-            <button class="btn" onclick="uploadTemp()" id="uploadTempBtn">☁️ 上传临时暂存(1小时)</button>
+        <!-- ===== 步骤1：选择角色 ===== -->
+        <div class="step-page active" id="page1">
+            <div class="panel">
+                <div class="panel-title">你是谁？</div>
+                <div class="panel-desc">选择你的角色，确定传输方向</div>
+                <div class="role-grid">
+                    <div class="role-card" onclick="selectRole('sender')" id="roleSender">
+                        <div class="role-icon">📤</div>
+                        <div class="role-name">我要发送文件</div>
+                        <div class="role-desc">选择文件并发送给对方</div>
+                    </div>
+                    <div class="role-card" onclick="selectRole('receiver')" id="roleReceiver">
+                        <div class="role-icon">📥</div>
+                        <div class="role-name">我要接收文件</div>
+                        <div class="role-desc">等待对方发送文件给你</div>
+                    </div>
+                </div>
+                <div class="btn-row">
+                    <a href="/" class="back-link">← 返回首页</a>
+                    <button class="btn" onclick="goStep2()" id="btnStep1" disabled>下一步 →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== 步骤2：选择方式 ===== -->
+        <div class="step-page" id="page2">
+            <div class="panel">
+                <div class="panel-title" id="step2Title">选择传输方式</div>
+                <div class="panel-desc" id="step2Desc">选择适合你的传输方式</div>
+                <div class="method-grid" id="methodGrid">
+                    <div class="method-card" onclick="selectMethod('p2p')" id="methodP2P">
+                        <div class="method-icon">📡</div>
+                        <div class="method-name">面对面直传</div>
+                        <div class="method-desc">P2P 点对点传输，文件不经过服务器，需要双方同时在线</div>
+                    </div>
+                    <div class="method-card" onclick="selectMethod('temp')" id="methodTemp">
+                        <div class="method-icon">☁️</div>
+                        <div class="method-name">临时暂存</div>
+                        <div class="method-desc">上传到服务器暂存（1小时自动过期），对方可随时下载</div>
+                    </div>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-secondary" onclick="goStep(1)">← 上一步</button>
+                    <button class="btn" onclick="goStep3()" id="btnStep2" disabled>下一步 →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== 步骤3：执行传输 ===== -->
+        <div class="step-page" id="page3">
+            <div class="panel" id="panel3">
+                <!-- 动态内容 -->
+            </div>
+            <div class="btn-row" style="margin-top:16px;">
+                <button class="btn btn-secondary" onclick="goStep(2)">← 上一步</button>
+                <button class="btn btn-secondary" onclick="goStep(1)">回到首页</button>
+            </div>
+        </div>
+
+        <div style="text-align:center;margin-top:20px;font-size:12px;color:#94a3b8;">
+            Copyright © 2026 HZYANG.
         </div>
     </div>
 
-    <!-- 面对面P2P区域 -->
-    <div class="card">
-        <h2>第二步：面对面直传设置</h2>
-        <div class="row">
-            <button class="btn" onclick="joinP2P()">1. 加入在线</button>
-            <button class="btn" onclick="refreshPeers()">2. 刷新在线好友</button>
-        </div>
-        <div class="row gray-text" id="peerList">在线列表：暂无</div>
-
-        <div class="row" style="margin-top:15px;">
-            <label>选择对方ID：</label>
-            <select id="targetPeer" style="padding:6px;border-radius:4px;border:1px solid #ccc;"></select>
-            <button class="btn" onclick="connectPeer()">3. 发起连接</button>
-        </div>
-
-        <div class="row" id="connStatus" class="red">连接状态：未连接</div>
-
-        <div class="progress">
-            <div id="progressBar" class="progress-bar"></div>
-        </div>
-        <div id="recvList"></div>
-    </div>
-
-    <!-- 临时暂存列表 -->
-    <div class="card">
-        <h2>临时暂存文件列表（1小时自动过期）</h2>
-        <button class="btn" onclick="refreshTempList()">刷新列表</button>
-        <div id="fileList" style="margin-top:15px;"></div>
-    </div>
-
-    <a href="/" class="back">← 返回首页</a>
+    <!-- 隐藏的文件输入（始终存在于 DOM 中） -->
+    <input type="file" id="fileInput" name="file" multiple aria-label="文件选择" style="display:none;">
 
 <script>
+// ===== 状态管理 =====
+let currentStep = 1;
+let selectedRole = "";  // "sender" 或 "receiver"
+let selectedMethod = ""; // "p2p" 或 "temp"
+
+// ===== 原有变量（保持不变） =====
 let myUid = "";
 let pc = null;
 let dataChannel = null;
 let targetUid = "";
 const CHUNK_SIZE = 64*1024;
-
+const BUFFER_THRESHOLD = 4*1024*1024;
 let sendFile = null;
 let fileOffset = 0;
 let recvMeta = null;
 let recvBuffer = [];
-
-// 防重复上传限制
 let isUploading = false;
 let lastUploadTime = 0;
-const UPLOAD_COOLDOWN = 3000; // 3秒冷却
+const UPLOAD_COOLDOWN = 3000;
 
-// 拖拽选文件
-const dropBox = document.getElementById('dropBox');
 const fileInput = document.getElementById('fileInput');
 const fileTip = document.getElementById('fileTip');
 
-dropBox.onclick = () => fileInput.click();
-
-['dragenter','dragover','dragleave','drop'].forEach(e=>dropBox.addEventListener(e,ev=>ev.preventDefault()));
-dropBox.addEventListener('dragover',()=>dropBox.classList.add('active'));
-dropBox.addEventListener('dragleave',()=>dropBox.classList.remove('active'));
-dropBox.addEventListener('drop',e=>{
-    dropBox.classList.remove('active');
-    fileInput.files = e.dataTransfer.files;
-    showFileInfo();
-});
+// ===== 文件拖拽逻辑（全局绑定） =====
 fileInput.onchange = showFileInfo;
 
+// 绑定拖拽到动态创建的 drop-box 上（在渲染步骤3时处理）
+function bindDropBox(dropBoxEl) {
+    ['dragenter','dragover','dragleave','drop'].forEach(e=>dropBoxEl.addEventListener(e,ev=>ev.preventDefault()));
+    dropBoxEl.addEventListener('dragover',()=>dropBoxEl.classList.add('active'));
+    dropBoxEl.addEventListener('dragleave',()=>dropBoxEl.classList.remove('active'));
+    dropBoxEl.addEventListener('drop',e=>{
+        dropBoxEl.classList.remove('active');
+        fileInput.files = e.dataTransfer.files;
+        showFileInfo();
+    });
+    dropBoxEl.onclick = () => fileInput.click();
+}
+
 function showFileInfo(){
+    let tipEl = document.getElementById('fileTip');
+    if(!tipEl) return;
     if(fileInput.files.length>0){
-        fileTip.innerText = `已选中：${fileInput.files[0].name}`;
+        tipEl.innerText = `已选中：${fileInput.files[0].name}`;
     }else{
-        fileTip.innerText = '';
+        tipEl.innerText = '';
     }
 }
 
+// ===== 步骤导航 =====
+function selectRole(role) {
+    selectedRole = role;
+    document.getElementById('roleSender').classList.remove('selected');
+    document.getElementById('roleReceiver').classList.remove('selected');
+    document.getElementById(role === 'sender' ? 'roleSender' : 'roleReceiver').classList.add('selected');
+    document.getElementById('btnStep1').disabled = false;
+}
+
+function goStep2() {
+    if(!selectedRole) return;
+    goStep(2);
+}
+
+function selectMethod(method) {
+    selectedMethod = method;
+    document.getElementById('methodP2P').classList.remove('selected');
+    document.getElementById('methodTemp').classList.remove('selected');
+    document.getElementById(method === 'p2p' ? 'methodP2P' : 'methodTemp').classList.add('selected');
+    document.getElementById('btnStep2').disabled = false;
+}
+
+function goStep3() {
+    if(!selectedMethod) return;
+    renderStep3();
+    goStep(3);
+}
+
+function goStep(step) {
+    currentStep = step;
+    // 页面切换
+    document.querySelectorAll('.step-page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page' + step).classList.add('active');
+    // 步骤指示器更新
+    updateStepIndicator(step);
+    window.scrollTo({top:0, behavior:'smooth'});
+}
+
+function updateStepIndicator(step) {
+    for(let i=1; i<=3; i++) {
+        let dot = document.getElementById('dot'+i);
+        let label = document.getElementById('label'+i);
+        dot.classList.remove('active','done');
+        label.classList.remove('active','done');
+        if(i < step) {
+            dot.classList.add('done');
+            dot.innerHTML = '✓';
+            label.classList.add('done');
+        } else if(i === step) {
+            dot.classList.add('active');
+            dot.innerHTML = String(i);
+            label.classList.add('active');
+        } else {
+            dot.innerHTML = String(i);
+        }
+    }
+    // 连线
+    let line1 = document.getElementById('line1');
+    let line2 = document.getElementById('line2');
+    line1.classList.toggle('done', step > 1);
+    line2.classList.toggle('done', step > 2);
+}
+
+// ===== 步骤3动态渲染 =====
+function renderStep3() {
+    let panel = document.getElementById('panel3');
+    let html = '';
+
+    if(selectedRole === 'sender' && selectedMethod === 'p2p') {
+        // 发送方 + P2P
+        html = `
+            <div class="panel-title">发送文件 — 面对面直传</div>
+            <div class="panel-desc">选择文件，建立 P2P 连接后发送</div>
+
+            <label class="drop-box" id="dropBox" aria-label="点击选择文件或拖拽文件到这里">
+                <div class="drop-icon">📂</div>
+                <div class="drop-title">点击选择 或 拖拽文件到这里</div>
+                <p>支持任意格式文件</p>
+            </label>
+            <div class="file-tip" id="fileTip"></div>
+
+            <div class="info-box" style="margin-top:20px;">
+                <div class="info-label"><span class="dot"></span>步骤 A：加入在线</div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button class="btn btn-secondary btn-sm" onclick="joinP2P()">加入在线</button>
+                    <button class="btn btn-secondary btn-sm" onclick="refreshPeers()">刷新列表</button>
+                </div>
+                <div class="info-value" id="peerList" style="margin-top:10px;">在线列表：暂无</div>
+            </div>
+
+            <div class="info-box">
+                <div class="info-label"><span class="dot"></span>步骤 B：选择对方并连接</div>
+                <div class="select-row" style="margin-bottom:12px;">
+                    <label for="targetPeer">对方ID：</label>
+                    <select id="targetPeer" name="targetPeer"></select>
+                </div>
+                <button class="btn btn-sm" onclick="connectPeer()">发起连接</button>
+            </div>
+
+            <div class="status-row red" id="connStatus">连接状态：未连接</div>
+
+            <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
+
+            <div style="text-align:center;margin-top:16px;">
+                <button class="btn" onclick="sendP2P()" disabled id="btnP2P">📡 发送文件</button>
+            </div>
+        `;
+    } else if(selectedRole === 'receiver' && selectedMethod === 'p2p') {
+        // 接收方 + P2P
+        html = `
+            <div class="panel-title">接收文件 — 面对面直传</div>
+            <div class="panel-desc">加入在线，等待对方发起连接和文件传输</div>
+
+            <div class="info-box">
+                <div class="info-label"><span class="dot"></span>步骤 A：加入在线</div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button class="btn btn-secondary btn-sm" onclick="joinP2P()">加入在线</button>
+                    <button class="btn btn-secondary btn-sm" onclick="refreshPeers()">刷新列表</button>
+                </div>
+                <div class="info-value" id="peerList" style="margin-top:10px;">在线列表：暂无</div>
+            </div>
+
+            <div class="info-box">
+                <div class="info-label"><span class="dot"></span>步骤 B：选择对方并连接</div>
+                <div class="select-row" style="margin-bottom:12px;">
+                    <label for="targetPeer">对方ID：</label>
+                    <select id="targetPeer" name="targetPeer"></select>
+                </div>
+                <button class="btn btn-sm" onclick="connectPeer()">发起连接</button>
+            </div>
+
+            <div class="status-row red" id="connStatus">连接状态：未连接</div>
+
+            <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
+
+            <div class="recv-list" id="recvList"></div>
+        `;
+    } else if(selectedRole === 'sender' && selectedMethod === 'temp') {
+        // 发送方 + 临时暂存
+        html = `
+            <div class="panel-title">上传文件到临时暂存</div>
+            <div class="panel-desc">文件保留1小时后自动过期，对方可通过链接下载</div>
+
+            <label class="drop-box" id="dropBox" aria-label="点击选择文件或拖拽文件到这里">
+                <div class="drop-icon">📂</div>
+                <div class="drop-title">点击选择 或 拖拽文件到这里</div>
+                <p>支持任意格式文件</p>
+            </label>
+            <div class="file-tip" id="fileTip"></div>
+
+            <div style="text-align:center;margin-top:20px;">
+                <button class="btn" onclick="uploadTemp()" id="uploadTempBtn">☁️ 上传到暂存</button>
+            </div>
+
+            <div class="info-box" style="margin-top:20px;">
+                <div class="info-label"><span class="dot"></span>已暂存的文件</div>
+                <button class="btn btn-secondary btn-sm" onclick="refreshTempList()" style="margin-bottom:12px;">🔄 刷新列表</button>
+                <div id="fileList"></div>
+            </div>
+        `;
+    } else if(selectedRole === 'receiver' && selectedMethod === 'temp') {
+        // 接收方 + 临时暂存
+        html = `
+            <div class="panel-title">下载暂存文件</div>
+            <div class="panel-desc">对方上传的文件将显示在这里，1小时内有效</div>
+
+            <div class="info-box">
+                <div class="info-label"><span class="dot"></span>暂存文件列表</div>
+                <button class="btn btn-secondary btn-sm" onclick="refreshTempList()" style="margin-bottom:12px;">🔄 刷新列表</button>
+                <div id="fileList"></div>
+            </div>
+        `;
+    }
+
+    panel.innerHTML = html;
+
+    // 绑定拖拽区（如果存在）
+    let dropBoxEl = document.getElementById('dropBox');
+    if(dropBoxEl) bindDropBox(dropBoxEl);
+
+    // 如果需要文件列表，加载
+    if(selectedMethod === 'temp') {
+        refreshTempList();
+    }
+}
+
+// ===== 原有功能函数（保持不变） =====
 window.onload = function(){
-    refreshTempList();
+    // 不再在页面加载时自动刷新，改为在步骤3渲染时刷新
 };
 
-// 临时暂存
 async function refreshTempList(){
     let res = await fetch("/temp/list");
     let json = await res.json();
     let listDom = document.getElementById("fileList");
+    if(!listDom) return;
     listDom.innerHTML = "";
+    if(json.code !== 0 || !json.list) return;
     if(json.list.length === 0){
-        listDom.innerHTML = "<div class='item'>暂无临时文件</div>";
+        let emptyDiv = document.createElement("div");
+        emptyDiv.className = "empty-state";
+        let iconDiv = document.createElement("div");
+        iconDiv.className = "empty-state-icon";
+        iconDiv.textContent = "📭";
+        emptyDiv.appendChild(iconDiv);
+        let textDiv = document.createElement("div");
+        textDiv.textContent = "暂无临时文件";
+        emptyDiv.appendChild(textDiv);
+        listDom.appendChild(emptyDiv);
         return;
     }
     json.list.forEach(item=>{
         let div = document.createElement("div");
         div.className = "item";
-        div.innerHTML = `
-            <span>${item.name}</span>
-            <div>
-                <span class="expire">剩余 ${item.left_min}分${item.left_sec}秒</span>
-                <a href="/temp/download/${item.fid}" target="_blank" style="margin-left:10px;">下载</a>
-                <button class="btn del-btn" onclick="deleteTempFile('${item.fid}')">删除</button>
-            </div>
-        `;
+        let nameDiv = document.createElement("div");
+        nameDiv.className = "item-name";
+        nameDiv.textContent = "📄 " + item.name;
+        div.appendChild(nameDiv);
+        let actionsDiv = document.createElement("div");
+        actionsDiv.className = "item-actions";
+        let expireSpan = document.createElement("span");
+        expireSpan.className = "expire";
+        expireSpan.textContent = "剩余 " + item.left_min + "分" + item.left_sec + "秒";
+        actionsDiv.appendChild(expireSpan);
+        let downloadLink = document.createElement("a");
+        downloadLink.href = "/temp/download/" + encodeURIComponent(item.fid);
+        downloadLink.target = "_blank";
+        downloadLink.textContent = "下载";
+        actionsDiv.appendChild(downloadLink);
+        let delBtn = document.createElement("button");
+        delBtn.className = "btn btn-danger";
+        delBtn.textContent = "删除";
+        delBtn.onclick = function() { deleteTempFile(item.fid); };
+        actionsDiv.appendChild(delBtn);
+        div.appendChild(actionsDiv);
         listDom.appendChild(div);
     });
 }
 
-// 删除临时文件
 async function deleteTempFile(fid){
     if(!confirm("确定删除此文件？")) return;
-    let res = await fetch(`/temp/delete/${fid}`, {
-        method: "POST"
-    });
+    let res = await fetch(`/temp/delete/${fid}`, {method:"POST"});
     let data = await res.json();
-    if(data.code === 0){
-        alert("删除成功");
-    }else{
-        alert("删除失败："+data.msg);
-    }
+    if(data.code === 0){ alert("删除成功"); } else { alert("删除失败："+data.msg); }
     refreshTempList();
 }
 
 async function uploadTemp(){
-    // 防重复 + 冷却限制
-    if(isUploading){
-        alert("正在上传中，请勿重复点击！");
-        return;
-    }
+    if(isUploading){ alert("正在上传中，请勿重复点击！"); return; }
     let now = Date.now();
-    if(now - lastUploadTime < UPLOAD_COOLDOWN){
-        alert("上传过于频繁，请稍后再试！");
-        return;
-    }
-    if(fileInput.files.length === 0){
-        alert("请先选择或拖拽文件！");
-        return;
-    }
-
+    if(now - lastUploadTime < UPLOAD_COOLDOWN){ alert("上传过于频繁，请稍后再试！"); return; }
+    if(fileInput.files.length === 0){ alert("请先选择或拖拽文件！"); return; }
     const btn = document.getElementById("uploadTempBtn");
+    if(!btn) return;
     try {
         isUploading = true;
         btn.disabled = true;
-        btn.innerText = "上传中...";
-
+        btn.innerText = "上传中…";
         for(let f of fileInput.files){
             let fd = new FormData();
             fd.append("file", f);
             await fetch("/temp/upload", {method:"POST", body:fd});
         }
         fileInput.value = "";
-        fileTip.innerText = "";
+        let tipEl = document.getElementById('fileTip');
+        if(tipEl) tipEl.innerText = "";
         refreshTempList();
         alert("上传成功！");
         lastUploadTime = Date.now();
-    }finally{
+    } finally {
         isUploading = false;
         btn.disabled = false;
-        btn.innerText = "☁️ 上传临时暂存(1小时)";
+        btn.innerText = "☁️ 上传到暂存";
     }
 }
 
-// P2P 逻辑完全原样不动
 async function joinP2P(){
     let r = await fetch("/p2p/join");
     let j = await r.json();
@@ -244,8 +603,10 @@ async function joinP2P(){
 async function refreshPeers(){
     let r = await fetch("/p2p/list");
     let j = await r.json();
-    document.getElementById("peerList").innerText = "在线列表：" + j.list.join(" | ");
+    let peerListEl = document.getElementById("peerList");
+    if(peerListEl) peerListEl.innerText = "在线列表：" + j.list.join(" | ");
     let sel = document.getElementById("targetPeer");
+    if(!sel) return;
     sel.innerHTML = "";
     j.list.forEach(u=>{
         if(u!==myUid) {
@@ -259,23 +620,18 @@ async function refreshPeers(){
 async function connectPeer(){
     targetUid = document.getElementById("targetPeer").value;
     if(!targetUid) return alert("请先选择对方ID");
-
     pc = new RTCPeerConnection({iceServers:[]});
-
     pc.onicecandidate = async e => {
-        if(e.candidate){
-            await sendSignal({type:"candidate", candidate:e.candidate.toJSON()});
-        }
+        if(e.candidate){ await sendSignal({type:"candidate", candidate:e.candidate.toJSON()}); }
     };
-
     pc.ondatachannel = e => {
         dataChannel = e.channel;
+        dataChannel.bufferedAmountLowThreshold = BUFFER_THRESHOLD;
         setupDC();
     };
-
     dataChannel = pc.createDataChannel("file");
+    dataChannel.bufferedAmountLowThreshold = BUFFER_THRESHOLD;
     setupDC();
-
     const isInitiator = myUid < targetUid;
     if(isInitiator){
         let offer = await pc.createOffer();
@@ -297,37 +653,31 @@ async function loopSignal(){
     while(true){
         let res = await fetch("/p2p/signal/recv");
         let data = await res.json();
-        if(!data.type) { 
-            await new Promise(r=>setTimeout(r,500)); 
-            continue; 
-        }
+        if(!data.type) { await new Promise(r=>setTimeout(r,500)); continue; }
+        if(data.frm && data.frm !== targetUid) { await new Promise(r=>setTimeout(r,500)); continue; }
         if(data.type === "offer"){
             await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
             let ans = await pc.createAnswer();
             await pc.setLocalDescription(ans);
             await sendSignal({type:"answer", sdp:pc.localDescription.toJSON()});
         }
-        else if(data.type === "answer"){
-            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-        }
-        else if(data.type === "candidate"){
-            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-        }
+        else if(data.type === "answer"){ await pc.setRemoteDescription(new RTCSessionDescription(data.sdp)); }
+        else if(data.type === "candidate"){ await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
     }
 }
 
 function setupDC(){
     dataChannel.onopen = ()=>{
-        let statusDom = document.getElementById("connStatus");
-        statusDom.innerText = "✅ 连接成功，可以发送文件";
-        statusDom.className = "row green";
-        document.getElementById("btnP2P").disabled = false;
+        let s = document.getElementById("connStatus");
+        if(s){ s.innerText = "✅ 连接成功，可以发送文件"; s.className = "status-row green"; }
+        let btn = document.getElementById("btnP2P");
+        if(btn) btn.disabled = false;
     };
     dataChannel.onclose = ()=>{
-        let statusDom = document.getElementById("connStatus");
-        statusDom.innerText = "❌ 连接已断开";
-        statusDom.className = "row red";
-        document.getElementById("btnP2P").disabled = true;
+        let s = document.getElementById("connStatus");
+        if(s){ s.innerText = "❌ 连接已断开"; s.className = "status-row red"; }
+        let btn = document.getElementById("btnP2P");
+        if(btn) btn.disabled = true;
     };
     dataChannel.onmessage = onMsg;
 }
@@ -335,20 +685,34 @@ function setupDC(){
 function sendP2P(){
     let f = fileInput.files[0];
     if(!f) return alert("请先选择文件！");
-    sendFile = f; 
+    sendFile = f;
     fileOffset = 0;
     dataChannel.send(JSON.stringify({type:"meta", name:f.name, size:f.size}));
     nextChunk();
 }
 
 function nextChunk(){
-    if(fileOffset >= sendFile.size) return;
+    if(fileOffset >= sendFile.size){
+        if(dataChannel.bufferedAmount === 0){
+            let s = document.getElementById("connStatus");
+            if(s) s.innerText = "✅ 文件发送完成";
+        }
+        return;
+    }
+    if(dataChannel.bufferedAmount > BUFFER_THRESHOLD){
+        dataChannel.addEventListener("bufferedamountlow", function onDrained(){
+            dataChannel.removeEventListener("bufferedamountlow", onDrained);
+            nextChunk();
+        });
+        return;
+    }
     let blob = sendFile.slice(fileOffset, fileOffset + CHUNK_SIZE);
     blob.arrayBuffer().then(buf=>{
         dataChannel.send(buf);
         fileOffset += CHUNK_SIZE;
         let pct = (fileOffset / sendFile.size * 100).toFixed(0);
-        document.getElementById("progressBar").style.width = pct + "%";
+        let pb = document.getElementById("progressBar");
+        if(pb) pb.style.width = pct + "%";
         nextChunk();
     });
 }
@@ -365,21 +729,22 @@ function onMsg(e){
         recvBuffer.push(e.data);
         let loaded = recvBuffer.length * CHUNK_SIZE;
         let pct = Math.min(100, (loaded / recvMeta.size * 100));
-        document.getElementById("progressBar").style.width = pct + "%";
+        let pb = document.getElementById("progressBar");
+        if(pb) pb.style.width = pct + "%";
         if(loaded >= recvMeta.size){
             let url = URL.createObjectURL(new Blob(recvBuffer));
             let a = document.createElement("a");
             a.href = url;
             a.download = recvMeta.name;
             a.innerText = "📥 下载 " + recvMeta.name;
-            document.getElementById("recvList").appendChild(document.createElement("br"));
-            document.getElementById("recvList").appendChild(a);
+            let rl = document.getElementById("recvList");
+            if(rl) rl.appendChild(a);
             recvMeta = null;
             recvBuffer = [];
         }
     }
 }
 </script>
-<!--Copyright © 2026 HZYANG.-->
+<script src="/live2d/dist/autoload.js?v=2"></script>
 </body>
 </html>

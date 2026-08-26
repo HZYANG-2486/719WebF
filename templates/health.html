@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ app_name }} {{ app_ver }} - 状态监控</title>
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/vendor/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"PingFang SC","Microsoft Yahei","Segoe UI",Arial,sans-serif;background:linear-gradient(180deg,#f5f7fb 0%,#eef2f9 100%);color:#1e293b;min-height:100%;-webkit-font-smoothing:antialiased;}
+
+.page-header{background:linear-gradient(135deg,#0066cc 0%,#0052a3 50%,#0066cc 100%);background-size:200% 200%;animation:headerGradient 8s ease infinite;color:#fff;padding:20px 28px;box-shadow:0 2px 16px rgba(0,102,204,0.2)}
+@media (min-width: 768px) {
+    .page-header { padding-left: 28px; }
+}
+@keyframes headerGradient{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+.page-header h1{font-size:20px;font-weight:600;display:flex;align-items:center;gap:10px}
+.page-header .subtitle{font-size:12px;opacity:0.85;margin-top:4px}
+
+.container{max-width:1100px;margin:0 auto;padding:20px 16px 40px}
+
+.top-bar{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px}
+.status-card{background:#fff;border:1px solid #e8ecf1;border-radius:14px;padding:16px 18px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.04);transition:transform 0.25s,box-shadow 0.25s}
+.status-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,0.06)}
+.status-card .dot{width:10px;height:10px;background:#22c55e;border-radius:50%;display:inline-block;margin-right:6px;animation:pulse 2s infinite;box-shadow:0 0 6px rgba(34,197,94,0.4)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.status-card.bad .dot{background:#ef4444;box-shadow:0 0 6px rgba(239,68,68,0.4);animation:pulse 1.2s infinite}
+.status-card .label{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;font-weight:600}
+.status-card .val{font-size:17px;font-weight:600;color:#1e293b}
+.status-card.bad .val{color:#b91c1c}
+
+.info-bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:20px}
+.info-chip{background:#fff;border:1px solid #e8ecf1;border-radius:10px;padding:10px 14px;box-shadow:0 1px 3px rgba(0,0,0,0.03)}
+.info-chip .k{color:#94a3b8;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
+.info-chip .v{font-size:15px;font-weight:600;color:#334155}
+.info-chip .v.http{color:#f59e0b}
+.info-chip .v.https{color:#0066cc}
+
+.section-title{color:#64748b;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;padding-left:4px}
+
+.subsystems{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:24px}
+.sub-card{background:#fff;border:1px solid #e8ecf1;border-radius:14px;padding:14px 16px;transition:border-color 0.25s,box-shadow 0.25s,transform 0.25s;box-shadow:0 2px 6px rgba(0,0,0,0.03)}
+.sub-card:hover{border-color:#0066cc;box-shadow:0 6px 16px rgba(0,102,204,0.08);transform:translateY(-2px)}
+.sub-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.sub-icon{font-size:20px}
+.sub-name{font-weight:600;font-size:14px;color:#1e293b}
+.sub-status{margin-left:auto;width:10px;height:10px;border-radius:50%}
+.sub-status.ok{background:#22c55e;box-shadow:0 0 6px rgba(34,197,94,0.4)}
+.sub-status.idle{background:#94a3b8;box-shadow:0 0 6px rgba(148,163,184,0.3)}
+.sub-status.warn{background:#eab308;box-shadow:0 0 6px rgba(234,179,8,0.4)}
+.sub-status.err{background:#ef4444;box-shadow:0 0 6px rgba(239,68,68,0.4)}
+.sub-msg{color:#64748b;font-size:12px;margin-bottom:8px}
+.sub-metrics{display:flex;gap:6px;flex-wrap:wrap}
+.sub-metric{background:#f1f5f9;border-radius:6px;padding:3px 8px;font-size:11px}
+.sub-metric .mk{color:#94a3b8}
+.sub-metric .mv{color:#334155;font-weight:600;margin-left:3px}
+.expand-btn{background:none;border:none;color:#0066cc;font-size:11px;cursor:pointer;padding:0;margin-top:8px;text-decoration:underline}
+.expand-btn:hover{color:#0052a3}
+.sub-details{display:none;margin-top:8px;padding-top:8px;border-top:1px solid #e2e8f0;font-size:11px;color:#64748b}
+.sub-details.show{display:block}
+.sub-details div{margin:2px 0}
+
+.chart-section{background:#fff;border:1px solid #e8ecf1;border-radius:16px;padding:18px 20px;margin-bottom:24px;box-shadow:0 2px 10px rgba(0,0,0,0.04)}
+.chart-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.chart-header h3{font-size:14px;font-weight:600;color:#1e293b}
+.metric-selector{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.metric-chip{display:flex;align-items:center;gap:5px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:4px 10px;font-size:11px;cursor:pointer;transition:all 0.15s;user-select:none}
+.metric-chip:hover{border-color:#94a3b8}
+.metric-chip.active{border-color:var(--chip-color,#0066cc);background:color-mix(in srgb, var(--chip-color,#0066cc) 8%, #fff)}
+.metric-chip.disabled{opacity:0.35;text-decoration:line-through}
+.metric-chip .chip-dot{width:8px;height:8px;border-radius:50%;background:var(--chip-color,#94a3b8)}
+.metric-chip .chip-label{color:#334155;font-weight:500}
+.metric-chip .chip-value{color:#64748b;font-weight:600;margin-left:4px}
+.chart-container{position:relative;width:100%;height:260px;background:linear-gradient(180deg,#fafbfc 0%, #f6f8fb 100%);border-radius:12px;border:1px solid #eef2f7}.chart-container canvas{width:100%!important;height:100%!important;display:block}
+.chart-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;margin-top:14px}
+.summary-card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px}
+.summary-card .sc-header{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.summary-card .sc-color{width:8px;height:8px;border-radius:50%}
+.summary-card .sc-name{font-size:11px;color:#64748b;font-weight:600}
+.summary-card .sc-grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;font-size:11px}
+.summary-card .sc-label{color:#94a3b8}
+.summary-card .sc-val{color:#334155;font-weight:600;text-align:right}
+.summary-card .sc-val.empty{color:#cbd5e1}
+.range-btns{display:flex;gap:6px}
+.range-btn{background:#fff;border:1px solid #e2e8f0;color:#475569;border-radius:8px;padding:5px 12px;font-size:12px;cursor:pointer;transition:all 0.2s;font-weight:500}
+.range-btn:hover{background:#f0f7ff;border-color:#0066cc;color:#0066cc}
+.range-btn.active{background:linear-gradient(135deg,#0066cc 0%,#0052a3 100%);border-color:#0066cc;color:#fff;box-shadow:0 2px 8px rgba(0,102,204,0.2)}
+.chart-legend{display:flex;gap:16px;margin-top:10px;font-size:11px;color:#64748b}
+.legend-item{display:flex;align-items:center;gap:5px}
+.legend-color{width:10px;height:3px;border-radius:2px}
+
+.actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-bottom:16px}
+.action-btn{background:linear-gradient(135deg,#0066cc 0%,#0052a3 100%);color:#fff;text-decoration:none;padding:10px 20px;border-radius:10px;font-size:13px;font-weight:600;transition:all 0.25s;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;box-shadow:0 2px 8px rgba(0,102,204,0.2)}
+.action-btn:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,102,204,0.3)}
+.action-btn.alt{background:#fff;color:#475569;border:1px solid #e2e8f0;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
+.action-btn.alt:hover{background:#f8fafc;color:#334155;border-color:#cbd5e1;box-shadow:0 2px 6px rgba(0,0,0,0.06)}
+
+.footer{text-align:center;color:#94a3b8;font-size:11px;padding:10px 0}
+
+@keyframes panelFadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.top-bar,.info-bar,.section-title,.subsystems,.chart-section,.actions{animation:panelFadeIn 0.4s ease-out}
+
+@media(max-width:768px){
+.top-bar{grid-template-columns:1fr}
+.subsystems{grid-template-columns:1fr}
+.chart-header{flex-direction:column;gap:10px;align-items:flex-start}
+.info-bar{grid-template-columns:1fr 1fr}
+}
+</style>
+</head>
+<body>
+<div class="page-header">
+<h1>🩺 状态监控</h1>
+<div class="subtitle">{{ app_ver }} | 运行时长: <span id="uptime">--</span></div>
+</div>
+
+<div class="container">
+<div class="top-bar">
+<div class="status-card" id="mainStatus">
+<div class="label">服务状态</div>
+<div><span class="dot"></span><span class="val" id="mainStatusText">运行中</span></div>
+</div>
+<div class="status-card">
+<div class="label">活跃子系统</div>
+<div class="val"><span id="activeCount">0</span> / <span id="totalCount">5</span></div>
+</div>
+<div class="status-card">
+<div class="label">最近请求</div>
+<div class="val" id="lastReq">--</div>
+</div>
+</div>
+
+<div class="info-bar">
+<div class="info-chip"><div class="k">端口</div><div class="v">{{ data.server.port if data.server else '--' }}</div></div>
+<div class="info-chip"><div class="k">绑定地址</div><div class="v">{{ data.server.host if data.server else '--' }}</div></div>
+<div class="info-chip"><div class="k">协议</div><div class="v {{ 'https' if data.server and data.server.https else 'http' }}">{{ 'HTTPS' if data.server and data.server.https else 'HTTP' }}</div></div>
+<div class="info-chip"><div class="k">应用</div><div class="v">{{ data.server.app if data.server else '--' }}</div></div>
+</div>
+
+<div class="section-title">子服务仪表板</div>
+<div class="subsystems" id="subsystems"></div>
+
+<div class="chart-section">
+<div class="chart-header">
+<h3>历史趋势分析</h3>
+<div class="range-btns">
+<button class="range-btn" data-range="5">5分钟</button>
+<button class="range-btn active" data-range="15">15分钟</button>
+<button class="range-btn" data-range="60">1小时</button>
+</div>
+</div>
+<div class="metric-selector" id="metricSelector"></div>
+<div class="chart-container">
+<canvas id="trendChart"></canvas>
+</div>
+<div class="chart-summary" id="chartSummary"></div>
+</div>
+
+<div class="actions">
+<a class="action-btn" href="/">🏠 返回首页</a>
+<a class="action-btn" href="/chat">💬 聊天室</a>
+<a class="action-btn alt" href="/files/">📁 文件浏览</a>
+<a class="action-btn alt" href="/transfer">📤 传输中心</a>
+</div>
+
+<div class="footer">{{ app_name }} {{ app_ver }} | 监控模块</div>
+</div>
+
+<script>
+const catalog = {{ catalog|tojson }};
+const subsystems = {{ subsystems|tojson }};
+
+const METRIC_DEFS = [
+    {key:'rooms_active', color:'#22c55e', label:'活跃房间', group:'activity'},
+    {key:'chat_users', color:'#3b82f6', label:'在线用户', group:'activity'},
+    {key:'http_sessions', color:'#f97316', label:'HTTP轮询', group:'activity'},
+    {key:'ws_connections', color:'#ef4444', label:'WS连接', group:'activity'},
+    {key:'temp_files', color:'#eab308', label:'临时文件', group:'files'},
+    {key:'share_files', color:'#14b8a6', label:'共享文件', group:'files'},
+    {key:'online_peers', color:'#8b5cf6', label:'在线Peer', group:'activity'},
+    {key:'rate_blocked', color:'#ec4899', label:'限速拦截', group:'events'},
+];
+
+let visibleMetrics = new Set(METRIC_DEFS.map(m => m.key));
+let chartHistory = [];
+let chartInstance = null;
+
+function hexToRgba(hex, alpha) {
+    const r = parseInt(hex.slice(1,3), 16);
+    const g = parseInt(hex.slice(3,5), 16);
+    const b = parseInt(hex.slice(5,7), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function formatUptime(seconds) {
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (d > 0) return `${d}天 ${h}时 ${m}分`;
+    if (h > 0) return `${h}时 ${m}分 ${s}秒`;
+    if (m > 0) return `${m}分 ${s}秒`;
+    return `${s}秒`;
+}
+
+function formatNum(n) {
+    if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n/1000).toFixed(1) + 'k';
+    return Math.round(n).toString();
+}
+
+function formatBytes(bytes) {
+    if (bytes === null || bytes === undefined || isNaN(bytes)) return '0 B';
+    const abs = Math.abs(bytes);
+    if (abs < 1024) return bytes + ' B';
+    if (abs < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (abs < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+function renderSubsystems(data) {
+    const container = document.getElementById('subsystems');
+    if (!container || !data) return;
+    container.innerHTML = '';
+    const order = ['chat', 'files', 'transfer', 'waf', 'ws'];
+    const activeCount = order.filter(k => data[k] && data[k].status !== 'idle').length;
+    document.getElementById('activeCount').textContent = activeCount;
+    for (const key of order) {
+        const info = data[key];
+        if (!info) continue;
+        const cat = catalog[key] || {name: key, icon: '❓', description: ''};
+        const statusMap = {healthy:'ok', idle:'idle', warning:'warn', degraded:'warn', error:'err'};
+        const sClass = statusMap[info.status] || 'idle';
+        const sub = document.createElement('div');
+        sub.className = 'sub-card';
+        const details = info.details || {};
+        const metricChips = Object.entries(details).map(([k,v]) => {
+            const label = k.replace(/_/g, ' ');
+            const isBytes = k.endsWith('_size') || k.includes('_bytes') || k === 'total_size';
+            const formatted = typeof v === 'number' ? (isBytes ? formatBytes(v) : formatNum(v)) : (v ?? '--');
+            return `<div class="sub-metric"><span class="mk">${label}:</span><span class="mv">${formatted}</span></div>`;
+        }).join('');
+        sub.innerHTML = `
+            <div class="sub-head">
+                <span class="sub-icon">${cat.icon}</span>
+                <span class="sub-name">${cat.name}</span>
+                <span class="sub-status ${sClass}"></span>
+            </div>
+            <div class="sub-msg">${info.message || cat.description}</div>
+            <div class="sub-metrics">${metricChips}</div>
+        `;
+        container.appendChild(sub);
+    }
+}
+
+function renderMetricSelector() {
+    const container = document.getElementById('metricSelector');
+    container.innerHTML = '';
+    const groups = {activity:'活动', files:'文件', events:'事件'};
+    for (const groupKey of Object.keys(groups)) {
+        const chips = METRIC_DEFS.filter(m => m.group === groupKey);
+        for (const m of chips) {
+            const chip = document.createElement('div');
+            chip.className = 'metric-chip' + (visibleMetrics.has(m.key) ? ' active' : ' disabled');
+            chip.style.setProperty('--chip-color', m.color);
+            chip.dataset.key = m.key;
+            chip.innerHTML = `<span class="chip-dot"></span><span class="chip-label">${m.label}</span><span class="chip-value" id="chipVal_${m.key}">--</span>`;
+            chip.addEventListener('click', () => {
+                if (visibleMetrics.has(m.key)) visibleMetrics.delete(m.key);
+                else visibleMetrics.add(m.key);
+                renderMetricSelector();
+                drawChart(chartHistory, currentRange);
+            });
+            container.appendChild(chip);
+        }
+    }
+}
+
+function renderSummaryCards(data) {
+    const container = document.getElementById('chartSummary');
+    if (!data || data.length < 2) {
+        container.innerHTML = '<div style="font-size:11px;color:#94a3b8;padding:8px 0">采集更多数据后显示统计摘要</div>';
+        return;
+    }
+    const activeMetrics = METRIC_DEFS.filter(m => visibleMetrics.has(m.key));
+    container.innerHTML = activeMetrics.map(m => {
+        const vals = data.map(p => p[m.key] || 0);
+        const latest = vals[vals.length-1];
+        const min = Math.min(...vals);
+        const max = Math.max(...vals);
+        const avg = vals.reduce((a,b) => a+b, 0) / vals.length;
+        const empty = vals.every(v => v === 0);
+        return `
+            <div class="summary-card">
+                <div class="sc-header">
+                    <span class="sc-color" style="background:${m.color}"></span>
+                    <span class="sc-name">${m.label}</span>
+                </div>
+                <div class="sc-grid">
+                    <span class="sc-label">最新</span><span class="sc-val ${empty?'empty':''}">${empty?'--':formatNum(latest)}</span>
+                    <span class="sc-label">最小</span><span class="sc-val ${empty?'empty':''}">${empty?'--':formatNum(min)}</span>
+                    <span class="sc-label">最大</span><span class="sc-val ${empty?'empty':''}">${empty?'--':formatNum(max)}</span>
+                    <span class="sc-label">平均</span><span class="sc-val ${empty?'empty':''}">${empty?'--':formatNum(avg)}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function updateChipValues(data) {
+    if (!data || data.length === 0) return;
+    const latest = data[data.length-1];
+    for (const m of METRIC_DEFS) {
+        const el = document.getElementById(`chipVal_${m.key}`);
+        if (el) {
+            const v = latest[m.key] || 0;
+            el.textContent = v > 0 ? formatNum(v) : '0';
+        }
+    }
+}
+
+function drawChart(history, rangeMinutes) {
+    chartHistory = history;
+    const now = Date.now();
+    const rangeStart = now - (rangeMinutes * 60 * 1000);
+    const rangeEnd = now;
+    
+    const filtered = (history || []).filter(p => {
+        const ts = p.timestamp * 1000;
+        return ts >= rangeStart && ts <= rangeEnd;
+    });
+    
+    if (!history || history.length === 0) {
+        if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+        renderSummaryCards([]);
+        updateChipValues([]);
+        return;
+    }
+    
+    const activeMetrics = METRIC_DEFS.filter(m => visibleMetrics.has(m.key));
+    const datasets = activeMetrics.map(m => ({
+        label: m.label,
+        data: filtered.map(p => ({ x: p.timestamp * 1000, y: p[m.key] || 0 })),
+        borderColor: m.color,
+        backgroundColor: hexToRgba(m.color, 0.12),
+        borderWidth: 2,
+        tension: 0.35,
+        pointRadius: 0,
+        pointHoverRadius: 5,
+        pointHoverBorderWidth: 2,
+        fill: true,
+    }));
+    
+    const timeUnit = rangeMinutes >= 60 ? 'minute' : 'second';
+    const displayFmt = rangeMinutes >= 60 ? 'HH:mm' : 'HH:mm:ss';
+    
+    const scalesConfig = {
+        x: {
+            type: 'time',
+            time: { unit: timeUnit, displayFormats: { [timeUnit]: displayFmt } },
+            min: rangeStart,
+            max: rangeEnd,
+            grid: { color: '#eef2f7', drawBorder: false },
+            border: { display: false },
+            ticks: {
+                color: '#94a3b8',
+                font: { size: 10 },
+                maxRotation: 0,
+                autoSkipPadding: 20
+            }
+        },
+        y: {
+            beginAtZero: true,
+            grid: { color: '#eef2f7', drawBorder: false },
+            border: { display: false },
+            ticks: {
+                color: '#94a3b8',
+                font: { size: 10 },
+                callback: (v) => formatNum(v)
+            }
+        }
+    };
+    
+    const tooltipConfig = {
+        enabled: true,
+        backgroundColor: 'rgba(15,23,42,0.95)',
+        titleColor: '#94a3b8',
+        bodyColor: '#f1f5f9',
+        borderColor: '#334155',
+        borderWidth: 1,
+        padding: 10,
+        displayColors: true,
+        boxPadding: 3,
+        titleFont: { size: 11, weight: 'normal' },
+        bodyFont: { size: 12 },
+        callbacks: {
+            title: (items) => {
+                if (!items.length) return '';
+                return new Date(items[0].parsed.x).toLocaleTimeString('zh-CN');
+            },
+            label: (item) => {
+                return ` ${item.dataset.label}: ${formatNum(item.parsed.y)}`;
+            }
+        }
+    };
+    
+    const options = {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 250, easing: 'easeOutQuart' },
+        interaction: { mode: 'index', intersect: false, axis: 'x' },
+        plugins: { legend: { display: false }, tooltip: tooltipConfig },
+        scales: scalesConfig
+    };
+    
+    const ctx = document.getElementById('trendChart').getContext('2d');
+    
+    if (chartInstance) {
+        chartInstance.data.datasets = datasets;
+        chartInstance.options.scales = scalesConfig;
+        chartInstance.options.plugins.tooltip = tooltipConfig;
+        chartInstance.update('none');
+    } else {
+        chartInstance = new Chart(ctx, { type: 'line', data: { datasets }, options });
+    }
+    
+    renderSummaryCards(filtered);
+    updateChipValues(filtered);
+}
+
+function setupChartHover() {
+}
+
+let currentRange = 15;
+let refreshTimer = null;
+
+async function refreshData() {
+    try {
+        const [detail, history] = await Promise.all([
+            fetch('/health/detail').then(r => r.json()),
+            fetch(`/health/history?minutes=${currentRange}`).then(r => r.json()),
+        ]);
+        document.getElementById('uptime').textContent = formatUptime(detail.uptime);
+        document.getElementById('lastReq').textContent = new Date().toLocaleTimeString('zh-CN');
+        renderSubsystems(detail.subsystems);
+        drawChart(history.data, currentRange);
+    } catch(e) {
+        console.error('数据刷新失败:', e);
+    }
+}
+
+document.querySelectorAll('.range-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentRange = parseInt(btn.dataset.range);
+        refreshData();
+    });
+});
+
+window.addEventListener('resize', () => drawChart(chartHistory, currentRange));
+
+renderMetricSelector();
+renderSubsystems(subsystems);
+setupChartHover();
+drawChart([], currentRange);
+refreshData();
+refreshTimer = setInterval(refreshData, 5000);
+</script>
+
+</body>
+</html>

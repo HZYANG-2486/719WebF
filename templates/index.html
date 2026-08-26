@@ -33,13 +33,21 @@
             background: white;
             border-radius: 10px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            transition: all 0.2s ease;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
         }
         a:hover{
             text-decoration:none;
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(0,102,204,0.15);
             color: #004d99;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            a {
+                transition: none;
+            }
+            a:hover {
+                transform: none;
+            }
         }
         .footer{
             margin-top: 60px;
@@ -53,9 +61,10 @@
     
     <div class="link"><a href="/files/">📁 文件浏览</a></div>
     <div class="link"><a href="/transfer">📤 传输中心</a></div>
+    <div class="link"><a href="/chat">💬 聊天室</a></div>
 
     <div class="footer">
-        Powered By 719WebF
+        Powered By {{ app_name }} {{ app_ver }}
     </div>
     
     <!--谁删版权谁没母-->
@@ -63,6 +72,6 @@
     <!--没啥意思,就是不要删除版权-->
     <!--HZYANG 2026-->
     
-    <script src="/live2d/dist/autoload.js"></script>
+    <script src="/live2d/dist/autoload.js?v=2"></script>
 </body>
 </html>

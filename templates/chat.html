@@ -1,0 +1,1355 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{{title}} | 聊天室</title>
+    <link rel="stylesheet" href="/static/sceditor/themes/default.min.css">
+    <style>
+        *{box-sizing:border-box;margin:0;padding:0;}
+        body{font-family:"PingFang SC","Microsoft Yahei","Segoe UI",Arial,sans-serif;height:100vh;display:flex;flex-direction:column;background:#f5f7fb;-webkit-font-smoothing:antialiased;}
+.header{background:linear-gradient(135deg,#0066cc 0%,#0052a3 50%,#0066cc 100%);background-size:200% 200%;animation:headerGradient 8s ease infinite;color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;box-shadow:0 2px 12px rgba(0,102,204,0.15);}
+@media (min-width: 768px) {
+    .header { padding-left: 24px; }
+}
+        @keyframes headerGradient{0%{background-position:0% 50%;}50%{background-position:100% 50%;}100%{background-position:0% 50%;}}
+        .header h1{font-size:18px;font-weight:600;display:flex;align-items:center;gap:8px;}
+        .header-right{display:flex;align-items:center;gap:12px;}
+        .btn{background:rgba(255,255,255,0.18);color:#fff;border:1px solid rgba(255,255,255,0.25);padding:7px 16px;border-radius:8px;cursor:pointer;font-size:13px;transition:background 0.2s, transform 0.2s, box-shadow 0.2s;font-weight:500;backdrop-filter:blur(10px);}
+        .btn:hover{background:rgba(255,255,255,0.28);transform:translateY(-1px);}
+        .btn:active{transform:translateY(0);}
+        .btn-primary{background:rgba(255,255,255,0.95);color:#0066cc;border-color:transparent;font-weight:600;}
+        .btn-primary:hover{background:#fff;box-shadow:0 4px 12px rgba(0,0,0,0.15);}
+        
+        .main{flex:1;display:flex;overflow:hidden;}
+        
+        .sidebar{width:280px;background:#fff;border-right:1px solid #e8ecf1;display:flex;flex-direction:column;flex-shrink:0;}
+        .sidebar-header{padding:14px;border-bottom:1px solid #e8ecf1;display:flex;gap:8px;background:#fafbfc;}
+        .sidebar-header input{flex:1;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;transition:border-color 0.2s, box-shadow 0.2s;background:#fff;}
+        .sidebar-header input:focus{outline:none;border-color:#0066cc;box-shadow:0 0 0 3px rgba(0,102,204,0.08);}
+        .sidebar-header .btn{padding:7px 12px;font-size:12px;background:#fff;color:#475569;border:1px solid #e2e8f0;}
+        .sidebar-header .btn:hover{background:#f1f5f9;color:#334155;}
+        
+        .room-list{flex:1;overflow-y:auto;padding:10px;}
+        .room-item{padding:12px 14px;margin-bottom:6px;border-radius:10px;cursor:pointer;transition:background 0.2s, border-color 0.2s, box-shadow 0.2s;border:1px solid transparent;background:transparent;font:inherit;color:inherit;text-align:left;width:100%;display:block;}
+        .room-item:hover{background:#f0f7ff;border-color:#cce5ff;}
+        .room-item.active{background:linear-gradient(135deg,#e6f0ff 0%,#f0f7ff 100%);border-color:#0066cc;box-shadow:0 2px 8px rgba(0,102,204,0.1);}
+        .room-name{font-size:14px;font-weight:600;color:#1e293b;display:flex;align-items:center;gap:6px;}
+        .room-meta{font-size:12px;color:#64748b;margin-top:6px;display:flex;gap:12px;}
+        .room-meta span{display:flex;align-items:center;gap:3px;}
+        .lock-icon{color:#94a3b8;font-size:11px;}
+        
+        .chat-area{flex:1;display:flex;flex-direction:column;background:#fff;}
+        
+        .chat-header{padding:14px 20px;border-bottom:1px solid #e8ecf1;background:#fff;display:flex;justify-content:space-between;align-items:center;box-shadow:0 1px 3px rgba(0,0,0,0.03);}
+        .chat-header h2{font-size:16px;font-weight:600;color:#1e293b;}
+        
+        .message-list{flex:1;overflow-y:auto;padding:20px;background:linear-gradient(180deg,#f8fafc 0%,#f1f5f9 100%);scrollbar-width:thin;scrollbar-color:#cbd5e1 transparent;}
+        .message-list::-webkit-scrollbar{width:6px;}
+        .message-list::-webkit-scrollbar-track{background:transparent;}
+        .message-list::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px;}
+        .message-list::-webkit-scrollbar-thumb:hover{background:#94a3b8;}
+        .message-item{margin-bottom:20px;display:flex;gap:12px;animation:messageSlideIn 0.3s ease-out;}
+        @keyframes messageSlideIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+        .message-avatar{width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,#0066cc 0%,#0052a3 100%);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;flex-shrink:0;box-shadow:0 2px 8px rgba(0,102,204,0.25);}
+        .message-content{flex:1;min-width:0;}
+        .message-header{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
+        .message-nick{font-size:13px;font-weight:600;color:#334155;}
+        .message-time{font-size:11px;color:#94a3b8;}
+        .message-body{font-size:14px;color:#1e293b;line-height:1.7;word-break:break-word;background:#fff;padding:12px 16px;border-radius:12px;border:1px solid #e8ecf1;display:inline-block;max-width:100%;box-shadow:0 1px 3px rgba(0,0,0,0.04);}
+        .message-body code{background:#f1f5f9;padding:2px 8px;border-radius:6px;font-family:"SF Mono","Consolas",monospace;font-size:13px;color:#475569;}
+        .message-body a{color:#0066cc;text-decoration:none;}
+        .message-body a:hover{text-decoration:underline;}
+        .message-body img{max-width:100%;height:auto;border-radius:8px;vertical-align:middle;cursor:zoom-in;transition:opacity 0.2s;}
+        .message-body img:hover{opacity:0.9;}
+        .chat-file-link{display:inline-flex;align-items:center;gap:6px;color:#0066cc;text-decoration:none;padding:6px 12px;background:#f0f7ff;border-radius:8px;font-size:13px;border:1px solid #cce5ff;transition:background 0.2s, border-color 0.2s;}
+        .chat-file-link:hover{background:#e6f0ff;border-color:#0066cc;}
+        
+        .chat-input-area{padding:12px 16px;border-top:1px solid #e5e7eb;background:#fff;}
+        .chat-input-wrapper{display:flex;gap:10px;align-items:flex-end;}
+        .chat-input-wrapper .editor-container{flex:1;border-radius:10px;overflow:hidden;border:1.5px solid #e2e8f0;transition:border-color 0.2s, box-shadow 0.2s;background:#fff;}
+        .chat-input-wrapper .editor-container:focus-within{border-color:#0066cc;box-shadow:0 0 0 4px rgba(0,102,204,0.08);}
+        .chat-input-wrapper textarea{width:100%;padding:10px 14px;border:none;font-size:14px;font-family:"Microsoft Yahei",Arial;outline:none;line-height:1.6;}
+        .chat-input-wrapper button{padding:0 22px;background:linear-gradient(135deg,#0066cc 0%,#0052a3 100%);color:#fff;border:none;border-radius:10px;cursor:pointer;font-size:14px;font-weight:600;transition:background 0.2s, transform 0.2s, box-shadow 0.2s, opacity 0.2s;flex-shrink:0;height:44px;display:flex;align-items:center;gap:6px;box-shadow:0 2px 8px rgba(0,102,204,0.25);}
+        .chat-input-wrapper button:hover{background:linear-gradient(135deg,#0052a3 0%,#004499 100%);transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,102,204,0.35);}
+        .chat-input-wrapper button:active{transform:translateY(0);box-shadow:0 2px 6px rgba(0,102,204,0.25);}
+        .chat-input-wrapper button:disabled{background:#94a3b8;cursor:not-allowed;transform:none;box-shadow:none;opacity:0.7;}
+        
+        .editor-resize-handle{height:10px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;background:transparent;transition:background 0.2s;}
+        .editor-resize-handle:hover{background:rgba(0,102,204,0.05);}
+        .editor-resize-handle .resize-bar{width:30px;height:4px;background:#cbd5e1;border-radius:2px;transition:background 0.2s, width 0.2s;}
+        .editor-resize-handle:hover .resize-bar{background:#0066cc;width:40px;}
+        .editor-resize-handle.dragging{background:rgba(0,102,204,0.1);}
+        .editor-resize-handle.dragging .resize-bar{background:#0066cc;width:50px;}
+        
+        .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:1000;}
+        .modal-overlay.show{display:flex;}
+        .modal{background:#fff;border-radius:12px;width:400px;max-width:90%;padding:24px;box-shadow:0 4px 24px rgba(0,0,0,0.15);}
+        .modal h3{font-size:18px;margin-bottom:20px;color:#333;}
+        .modal .form-group{margin-bottom:16px;}
+        .modal .form-group label{display:block;font-size:14px;color:#555;margin-bottom:6px;}
+        .modal .form-group input{width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px;}
+        .modal .modal-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:24px;}
+        
+        .nick-display{display:flex;align-items:center;gap:8px;font-size:14px;background:rgba(255,255,255,0.15);padding:6px 12px;border-radius:20px;}
+        
+        .bbcode-help{position:absolute;bottom:100px;right:20px;background:#fff;border:1px solid #ddd;border-radius:8px;padding:12px;box-shadow:0 2px 12px rgba(0,0,0,0.1);font-size:12px;color:#666;display:none;z-index:100;}
+        .bbcode-help.show{display:block;}
+        .bbcode-help h4{margin-bottom:8px;font-size:13px;color:#333;}
+        .bbcode-help code{background:#f4f4f4;padding:2px 4px;border-radius:3px;font-size:11px;}
+        
+        .no-room{flex:1;display:flex;align-items:center;justify-content:center;color:#999;font-size:16px;}
+        .conn-status{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#64748b;margin-right:12px;user-select:none;}
+        .conn-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;transition:background 0.3s, box-shadow 0.3s;box-shadow:0 0 4px rgba(34,197,94,0.4);}
+        .conn-status.reconnecting{color:#ca8a04;}
+        .conn-status.reconnecting .conn-dot{background:#eab308;box-shadow:0 0 4px rgba(234,179,8,0.4);animation:connPulse 1s ease-in-out infinite;}
+        .conn-status.disconnected{color:#dc2626;}
+        .conn-status.disconnected .conn-dot{background:#ef4444;box-shadow:0 0 4px rgba(239,68,68,0.4);}
+        @keyframes connPulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
+        .reconnect-banner{display:none;padding:10px 16px;background:#fef3c7;border-bottom:1px solid #fde68a;color:#92400e;font-size:13px;text-align:center;align-items:center;justify-content:center;gap:8px;}
+        .reconnect-banner.show{display:flex;}
+        .reconnect-banner button{background:#d97706;color:#fff;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;}
+        .reconnect-banner button:hover{background:#b45309;}
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>💬 聊天室</h1>
+        <div class="header-right">
+            <div class="nick-display">
+                <span>昵称:</span>
+                <span id="currentNick">加载中…</span>
+                <button class="btn" style="padding:2px 8px;font-size:12px;" onclick="openNickModal()">修改</button>
+            </div>
+            <button class="btn btn-primary" onclick="openCreateModal()">创建房间</button>
+        </div>
+    </div>
+    
+    <div class="main">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <label for="roomFilter" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;">搜索房间</label>
+                <input type="text" id="roomFilter" name="roomFilter" placeholder="搜索房间…" oninput="filterRooms()" autocomplete="off">
+                <button class="btn" onclick="refreshRoomList()">刷新</button>
+            </div>
+            <div class="room-list" id="roomList">
+                <div style="text-align:center;color:#999;padding:20px;">加载中…</div>
+            </div>
+        </div>
+        
+        <div class="chat-area">
+            <div class="chat-header" id="chatHeader" style="display:none;">
+                <h2 id="roomTitle"></h2>
+                <div>
+                    <span class="conn-status" id="connStatus" title="连接状态正常">
+                        <span class="conn-dot"></span>
+                        <span class="conn-text">已连接</span>
+                    </span>
+                    <button class="btn" onclick="leaveRoom()">离开房间</button>
+                </div>
+            </div>
+            
+            <div class="reconnect-banner" id="reconnectBanner">
+                <span>⚠️ 连接已断开，正在尝试重连…</span>
+                <button onclick="forceReconnect()">立即重连</button>
+            </div>
+            
+            <div class="message-list" id="messageList">
+                <div class="no-room">请选择或创建一个房间开始聊天</div>
+            </div>
+            
+            <div class="chat-input-area" id="chatInputArea" style="display:none;">
+                <div class="chat-input-wrapper">
+                    <div class="editor-container">
+                        <div class="editor-resize-handle" id="editorResizeHandle" title="上下拖动调整高度">
+                            <div class="resize-bar"></div>
+                        </div>
+                        <label for="chatInput" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;">消息输入</label>
+                        <textarea id="chatInput" name="message" rows="5" placeholder="输入消息，支持 BBCode 格式…" autocomplete="off"></textarea>
+                    </div>
+                    <button id="sendBtn" onclick="sendMessage()">
+                        <span>发送</span>
+                        <span style="font-size:12px;">→</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 创建房间模态框 -->
+    <div class="modal-overlay" id="createModal">
+        <div class="modal">
+            <h3>创建新房间</h3>
+            <div class="form-group">
+                <label for="roomNameInput">房间名称</label>
+                <input type="text" id="roomNameInput" name="roomName" placeholder="输入房间名称" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="roomPasswordInput">房间密码（可选）</label>
+                <input type="password" id="roomPasswordInput" name="roomPassword" placeholder="设置密码保护房间" autocomplete="new-password">
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeCreateModal()">取消</button>
+                <button class="btn btn-primary" onclick="createRoom()">创建</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 加入房间模态框 -->
+    <div class="modal-overlay" id="joinModal">
+        <div class="modal">
+            <h3>加入房间</h3>
+            <div class="form-group">
+                <label for="joinRoomId">房间ID</label>
+                <input type="text" id="joinRoomId" name="joinRoomId" readonly autocomplete="off">
+            </div>
+            <div class="form-group" id="passwordGroup" style="display:none;">
+                <label for="joinPassword">房间密码</label>
+                <input type="password" id="joinPassword" name="joinPassword" placeholder="输入房间密码" autocomplete="current-password">
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeJoinModal()">取消</button>
+                <button class="btn btn-primary" onclick="joinRoom()">加入</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 修改昵称模态框 -->
+    <div class="modal-overlay" id="nickModal">
+        <div class="modal">
+            <h3>修改昵称</h3>
+            <div class="form-group">
+                <label for="newNick">新昵称</label>
+                <input type="text" id="newNick" name="newNick" placeholder="输入新昵称" autocomplete="off">
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeNickModal()">取消</button>
+                <button class="btn btn-primary" onclick="changeNick()">确定</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/sceditor/sceditor.min.js"></script>
+    <script src="/static/sceditor/icons.js"></script>
+    <script src="/static/sceditor/formats/bbcode.js"></script>
+    <script>
+        let currentRoomId = "";
+        let currentRoomName = "";
+        let lastMsgId = "";
+        let recvInterval = null;
+        let displayedMsgIds = new Set();
+        let chatEditor = null;
+
+        let ws = null;
+        let wsConnected = false;
+        let wsReconnectAttempts = 0;
+        const WS_MAX_RECONNECT = 5;
+        let wsJoinInProgress = false;
+
+        let emptyMsgCount = 0;
+        let errorCount = 0;
+        let currentPollInterval = 1000;
+        const MIN_POLL_INTERVAL = 1000;
+        const MAX_POLL_INTERVAL = 5000;
+        const ERROR_THRESHOLD = 3;
+        let watchdogTimer = null;
+        let lastRecvActivity = 0;
+        
+        function setPollInterval(ms) {
+            currentPollInterval = Math.max(MIN_POLL_INTERVAL, Math.min(MAX_POLL_INTERVAL, ms));
+        }
+        
+        function updatePollInterval() {
+            if(emptyMsgCount < 3) {
+                currentPollInterval = 1000;
+            } else if(emptyMsgCount < 5) {
+                currentPollInterval = 2000;
+            } else if(emptyMsgCount < 8) {
+                currentPollInterval = 3000;
+            } else {
+                currentPollInterval = 5000;
+            }
+        }
+        
+        function ensureRecvRunning() {
+            if(!currentRoomId) return;
+            if(wsConnected) return;
+            if(recvInterval) return;
+            console.warn("recvMessages 未运行，强制重启");
+            startRecvLoop();
+        }
+        
+        function startWatchdog() {
+            if(watchdogTimer) clearInterval(watchdogTimer);
+            watchdogTimer = setInterval(function() {
+                if(!currentRoomId) return;
+                if(wsConnected) {
+                    lastRecvActivity = Date.now();
+                    return;
+                }
+                if(Date.now() - lastRecvActivity > 15000) {
+                    console.warn("接收循环超过15秒无活动，检查并重启");
+                    ensureRecvRunning();
+                    lastRecvActivity = Date.now();
+                }
+            }, 5000);
+        }
+        
+        function stopWatchdog() {
+            if(watchdogTimer) {
+                clearInterval(watchdogTimer);
+                watchdogTimer = null;
+            }
+        }
+        
+        function updateConnectionStatus(state) {
+            let el = document.getElementById("connStatus");
+            if(!el) return;
+            el.className = "conn-status";
+            let textEl = el.querySelector(".conn-text");
+            let dotEl = el.querySelector(".conn-dot");
+            if(state === "connected") {
+                if(textEl) textEl.textContent = "已连接";
+                el.title = "连接状态正常";
+            } else if(state === "reconnecting") {
+                el.classList.add("reconnecting");
+                if(textEl) textEl.textContent = "重连中";
+                el.title = "正在尝试重新连接";
+            } else if(state === "disconnected") {
+                el.classList.add("disconnected");
+                if(textEl) textEl.textContent = "已断开";
+                el.title = "连接已断开";
+            }
+        }
+        
+        function showReconnectionPrompt() {
+            let banner = document.getElementById("reconnectBanner");
+            if(banner) banner.classList.add("show");
+            updateConnectionStatus("disconnected");
+        }
+        
+        function hideReconnectionPrompt() {
+            let banner = document.getElementById("reconnectBanner");
+            if(banner) banner.classList.remove("show");
+            updateConnectionStatus("connected");
+        }
+        
+        async function forceReconnect() {
+            stopRecvLoop();
+            errorCount = 0;
+            emptyMsgCount = 0;
+            setPollInterval(MIN_POLL_INTERVAL);
+            updateConnectionStatus("reconnecting");
+            
+            if(!wsConnected && ws && ws.readyState !== WebSocket.OPEN) {
+                try {
+                    ws.close();
+                } catch(e) {}
+                wsReconnectAttempts = 0;
+                initWebSocket();
+                return;
+            }
+            
+            if(currentRoomId) {
+                try {
+                    let res = await fetch(`/chat/recv?room_id=${currentRoomId}&last_id=${lastMsgId}`);
+                    let data = await res.json();
+                    if(data.code === 0 && data.messages && data.messages.length > 0) {
+                        renderMessages(data.messages);
+                        lastMsgId = data.messages[data.messages.length - 1].id;
+                        scrollToBottom();
+                    }
+                    hideReconnectionPrompt();
+                } catch(e) {
+                    showReconnectionPrompt();
+                    return;
+                }
+            }
+            if(!wsConnected) {
+                startRecvLoop();
+            }
+        }
+        
+        function htmlEscape(text) {
+            if(!text) return '';
+            return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+        
+        function extractUrl(text) {
+            let urlMatch = text.match(/https?:\/\/[^\s"'<>]+/);
+            if(urlMatch) return urlMatch[0];
+            let hrefMatch = text.match(/href=["'](https?:\/\/[^\s"']+)["']/i);
+            if(hrefMatch) return hrefMatch[1];
+            return '';
+        }
+        
+        const SIZE_LEVEL_MAP = { '1': '10px', '2': '12px', '3': '14px', '4': '18px', '5': '22px', '6': '28px', '7': '36px' };
+        const SAFE_COLORS = new Set(['red','green','blue','yellow','orange','purple','pink','black','white','gray','silver','gold','brown']);
+        const SAFE_FONT_RE = /^[-a-zA-Z0-9 ",_]+$/;
+        
+        function parseSimpleBbcode(text) {
+            if(!text) return text;
+            let result = htmlEscape(text);
+            
+            for(let depth = 0; depth < 20; depth++) {
+                let changed = false;
+                
+                result = result.replace(/\[b\]((?:(?!\[\/?b\])[\s\S])*?)\[\/b\]/gi, function(m, value) {
+                    changed = true;
+                    return '<strong>' + value + '</strong>';
+                });
+                result = result.replace(/\[i\]((?:(?!\[\/?i\])[\s\S])*?)\[\/i\]/gi, function(m, value) {
+                    changed = true;
+                    return '<em>' + value + '</em>';
+                });
+                result = result.replace(/\[u\]((?:(?!\[\/?u\])[\s\S])*?)\[\/u\]/gi, function(m, value) {
+                    changed = true;
+                    return '<u>' + value + '</u>';
+                });
+                result = result.replace(/\[s\]((?:(?!\[\/?s\])[\s\S])*?)\[\/s\]/gi, function(m, value) {
+                    changed = true;
+                    return '<s>' + value + '</s>';
+                });
+                result = result.replace(/\[code\]((?:(?!\[\/?code\])[\s\S])*?)\[\/code\]/gi, function(m, value) {
+                    changed = true;
+                    return '<code>' + value + '</code>';
+                });
+                
+                result = result.replace(/\[color=([^\]]+)\]((?:(?!\[\/?color\])[\s\S])*?)\[\/color\]/gi, function(m, color, value) {
+                    changed = true;
+                    color = color.trim().toLowerCase();
+                    if(!color.startsWith('#') && !SAFE_COLORS.has(color)) {
+                        color = '#000000';
+                    }
+                    if(color.startsWith('#') && !/^#[0-9a-f]{6}$/.test(color)) {
+                        color = '#000000';
+                    }
+                    return '<span style="color:' + color + '">' + value + '</span>';
+                });
+                
+                result = result.replace(/\[size=([^\]]+)\]((?:(?!\[\/?size\])[\s\S])*?)\[\/size\]/gi, function(m, size, value) {
+                    changed = true;
+                    size = size.trim().toLowerCase();
+                    if(SIZE_LEVEL_MAP[size]) {
+                        return '<span style="font-size:' + SIZE_LEVEL_MAP[size] + '">' + value + '</span>';
+                    }
+                    let pxMatch = size.match(/^(\d+)px$/);
+                    if(pxMatch) {
+                        let px = parseInt(pxMatch[1]);
+                        if(px >= 1 && px <= 72) {
+                            return '<span style="font-size:' + size + '">' + value + '</span>';
+                        }
+                    }
+                    return '<span style="font-size:14px">' + value + '</span>';
+                });
+                
+                result = result.replace(/\[font=([^\]]+)\]((?:(?!\[\/?font\])[\s\S])*?)\[\/font\]/gi, function(m, font, value) {
+                    changed = true;
+                    font = font.trim();
+                    if(!font) return value;
+                    if(SAFE_FONT_RE.test(font) && font.length <= 200) {
+                        return '<span style="font-family:' + font + '">' + value + '</span>';
+                    }
+                    return value;
+                });
+                
+                result = result.replace(/\[url=([^\]]+)\]((?:(?!\[\/?url\])[\s\S])*?)\[\/url\]/gi, function(m, url, value) {
+                    changed = true;
+                    url = url.trim().replace(/^`|`$/g, '');
+                    url = url.replace(/javascript:/gi, '').replace(/data:/gi, '');
+                    if(!url.startsWith('http://') && !url.startsWith('https://')) {
+                        url = url.indexOf('.') > 0 ? 'https://' + url : '';
+                    }
+                    if(url) {
+                        return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + value + '</a>';
+                    }
+                    return value;
+                });
+                
+                result = result.replace(/\[img=([^\]]+)\]((?:(?!\[\/?img\])[\s\S])*?)\[\/img\]/gi, function(m, src, alt) {
+                    changed = true;
+                    src = src.trim().replace(/^`|`$/g, '');
+                    alt = alt.trim().replace(/^`|`$/g, '');
+                    let width = '', height = '';
+                    let dimMatch = src.match(/^(\d+)x(\d+)$/i);
+                    if(dimMatch) {
+                        width = dimMatch[1];
+                        height = dimMatch[2];
+                        src = alt;
+                        alt = '';
+                    }
+                    src = src.replace(/javascript:/gi, '').replace(/data:/gi, '');
+                    if(!src.startsWith('http://') && !src.startsWith('https://')) {
+                        return src;
+                    }
+                    let altText = alt ? alt.substring(0, 50) : src.substring(0, 50);
+                    let style = 'max-width:300px;max-height:200px;';
+                    let wAttr = '', hAttr = '';
+                    if(width && height) {
+                        let w = Math.min(parseInt(width), 600);
+                        let h = Math.min(parseInt(height), 600);
+                        style = 'width:' + w + 'px;height:' + h + 'px;';
+                        wAttr = ' width="' + w + '"';
+                        hAttr = ' height="' + h + '"';
+                    }
+                    return '<img src="' + src + '" alt="' + altText + '" style="' + style + '"' + wAttr + hAttr + ' />';
+                });
+                
+                result = result.replace(/\[img\]((?:(?!\[\/?img\])[\s\S])*?)\[\/img\]/gi, function(m, content) {
+                    changed = true;
+                    content = content.trim().replace(/^`|`$/g, '');
+                    let url = extractUrl(content);
+                    if(!url) {
+                        return content;
+                    }
+                    return '<img src="' + url + '" alt="' + url.substring(0, 50) + '" style="max-width:300px;max-height:200px;" width="300" height="200" />';
+                });
+                
+                result = result.replace(/\[file=([^\]]+)\]((?:(?!\[\/?file\])[\s\S])*?)\[\/file\]/gi, function(m, fid, value) {
+                    changed = true;
+                    let url = fid.replace(/\\/g, '/');
+                    url = url.replace(/javascript:/gi, '').replace(/data:/gi, '');
+                    if(!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('/')) {
+                        url = '/temp/download/' + encodeURIComponent(url);
+                    }
+                    return '<a href="' + url + '" target="_blank" class="chat-file-link">📎 ' + value + '</a>';
+                });
+                
+                if(!changed) break;
+            }
+            
+            result = result.replace(/\n/g, '<br>');
+            return result;
+        }
+        
+        function initEditor() {
+            if(typeof sceditor !== 'undefined' && typeof sceditor.create === 'function') {
+                try {
+                    var textarea = document.getElementById("chatInput");
+                    if(!textarea) {
+                        window.chatEditor = null;
+                        return;
+                    }
+                    
+                    sceditor.create(textarea, {
+                        format: "bbcode",
+                        width: "100%",
+                        height: "180px",
+                        minHeight: "120px",
+                        maxHeight: "500px",
+                        toolbar: "bold,italic,underline,strike,color,size,font,|,link,image,code,|,source",
+                        style: "/static/sceditor/themes/default.min.css",
+                        icons: "default",
+                        resizeEnabled: false,
+                        syncOnChange: true,
+                        emoticonsEnabled: false,
+                        emoticons: {},
+                        emoticonsRoot: "",
+                        plugins: "bbcode"
+                    });
+                    
+                    var editorRetryCount = 0;
+                    var editorRetryInterval = setInterval(function() {
+                        editorRetryCount++;
+                        if(typeof sceditor.instance === 'function') {
+                            var instance = sceditor.instance(textarea);
+                            if(instance) {
+                                window.chatEditor = instance;
+                                clearInterval(editorRetryInterval);
+                                console.log("SCeditor instance acquired successfully");
+                                initEditorResize();
+                                return;
+                            }
+                        }
+                        if(editorRetryCount >= 20) {
+                            clearInterval(editorRetryInterval);
+                            window.chatEditor = null;
+                            console.log("SCeditor instance acquisition failed after 20 retries");
+                        }
+                    }, 100);
+                } catch(e) {
+                    window.chatEditor = null;
+                }
+            } else {
+                setTimeout(initEditor, 200);
+            }
+        }
+        
+        
+        
+        async function init() {
+            await loadNick();
+            await refreshRoomList();
+            await tryRejoinRoom();
+            initWebSocket();
+            setInterval(refreshRoomList, 10000);
+        }
+        
+        async function tryRejoinRoom() {
+            let savedRoomId = localStorage.getItem("chat_current_room");
+            let savedRoomName = localStorage.getItem("chat_current_room_name");
+            let savedNick = localStorage.getItem("chat_nick");
+            if(savedRoomId) {
+                try {
+                    let body = {room_id: savedRoomId};
+                    if(savedNick) body.nick = savedNick;
+                    let res = await fetch("/chat/join", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify(body)
+                    });
+                    let data = await res.json();
+                    if(data.code === 0) {
+                        currentRoomId = savedRoomId;
+                        currentRoomName = savedRoomName || data.name;
+                        document.getElementById("roomTitle").textContent = currentRoomName;
+                        document.getElementById("chatHeader").style.display = "flex";
+                        document.getElementById("chatInputArea").style.display = "block";
+                        document.getElementById("messageList").innerHTML = "";
+                        displayedMsgIds.clear();
+                        renderMessages(data.messages);
+                        lastMsgId = data.messages.length > 0 ? data.messages[data.messages.length-1].id : "";
+                        initEditor();
+                        startRecvLoop();
+                    }
+                } catch(e) {
+                    console.warn("自动重连房间失败:", e);
+                }
+            }
+        }
+        
+        async function loadNick() {
+            let savedNick = localStorage.getItem("chat_nick");
+            let body = savedNick ? {nick: savedNick} : {nick: ""};
+            let res = await fetch("/chat/set_nick", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+            let data = await res.json();
+            if(data.code === 0) {
+                document.getElementById("currentNick").textContent = data.nick;
+                localStorage.setItem("chat_nick", data.nick);
+            }
+        }
+        
+        
+        
+        async function refreshRoomList() {
+            let res = await fetch("/chat/list");
+            let data = await res.json();
+            if(data.code === 0) {
+                renderRoomList(data.list);
+            }
+        }
+        
+        function renderRoomList(rooms) {
+            let container = document.getElementById("roomList");
+            let filter = document.getElementById("roomFilter").value.toLowerCase();
+            
+            let filtered = rooms.filter(r => r.name.toLowerCase().includes(filter));
+            
+            container.innerHTML = '';
+            
+            if(filtered.length === 0) {
+                let emptyDiv = document.createElement("div");
+                emptyDiv.style.cssText = "text-align:center;color:#999;padding:20px;";
+                emptyDiv.textContent = "暂无房间";
+                container.appendChild(emptyDiv);
+                return;
+            }
+            
+            filtered.forEach(room => {
+                let item = document.createElement("button");
+                item.type = "button";
+                item.className = "room-item " + (room.room_id === currentRoomId ? 'active' : '');
+                item.setAttribute("aria-label", room.name + "，" + room.message_count + "条消息，" + room.user_count + "人");
+                item.onclick = function() {
+                    showJoinModal(room.room_id, room.name, room.has_password);
+                };
+                
+                let nameDiv = document.createElement("div");
+                nameDiv.className = "room-name";
+                nameDiv.textContent = room.name;
+                
+                if(room.has_password) {
+                    let lockSpan = document.createElement("span");
+                    lockSpan.className = "lock-icon";
+                    lockSpan.textContent = "🔒";
+                    nameDiv.appendChild(lockSpan);
+                }
+                
+                let metaDiv = document.createElement("div");
+                metaDiv.className = "room-meta";
+                
+                let msgSpan = document.createElement("span");
+                msgSpan.textContent = "🗨️ " + room.message_count + "条消息";
+                metaDiv.appendChild(msgSpan);
+                
+                let userSpan = document.createElement("span");
+                userSpan.textContent = "👥 " + room.user_count + "人";
+                metaDiv.appendChild(userSpan);
+                
+                item.appendChild(nameDiv);
+                item.appendChild(metaDiv);
+                container.appendChild(item);
+            });
+        }
+        
+        function filterRooms() {
+            refreshRoomList();
+        }
+        
+        function openCreateModal() {
+            document.getElementById("roomNameInput").value = "";
+            document.getElementById("roomPasswordInput").value = "";
+            document.getElementById("createModal").classList.add("show");
+        }
+        
+        function closeCreateModal() {
+            document.getElementById("createModal").classList.remove("show");
+        }
+        
+        async function createRoom() {
+            let name = document.getElementById("roomNameInput").value.trim();
+            let password = document.getElementById("roomPasswordInput").value;
+            
+            if(!name) {
+                alert("请输入房间名称");
+                return;
+            }
+            
+            let res = await fetch("/chat/create", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({name, password})
+            });
+            let data = await res.json();
+            
+            if(data.code === 0) {
+                alert("房间创建成功！");
+                closeCreateModal();
+                await joinRoomDirect(data.room_id, password);
+                await refreshRoomList();
+            } else {
+                alert(data.msg);
+            }
+        }
+        
+        function showJoinModal(roomId, roomName, hasPassword) {
+            document.getElementById("joinRoomId").value = roomId;
+            document.getElementById("joinPassword").value = "";
+            document.getElementById("passwordGroup").style.display = hasPassword ? "block" : "none";
+            document.getElementById("joinModal").classList.add("show");
+        }
+        
+        function closeJoinModal() {
+            document.getElementById("joinModal").classList.remove("show");
+        }
+        
+        async function joinRoom() {
+            let roomId = document.getElementById("joinRoomId").value;
+            let password = document.getElementById("passwordGroup").style.display === "block" ? document.getElementById("joinPassword").value : "";
+            
+            await joinRoomDirect(roomId, password);
+            closeJoinModal();
+            await refreshRoomList();
+        }
+        
+        async function joinRoomDirect(roomId, password) {
+            if(currentRoomId) {
+                await leaveRoom();
+            }
+
+            let nick = document.getElementById("currentNick").textContent;
+
+            if(wsIsOpen() && wsJoinRoom(roomId, password)) {
+                currentRoomId = roomId;
+                currentRoomName = "";
+                localStorage.setItem("chat_current_room", roomId);
+                localStorage.setItem("last_room_id", roomId);
+                localStorage.setItem("last_nickname", nick);
+                document.getElementById("roomTitle").textContent = "连接中...";
+                document.getElementById("chatHeader").style.display = "flex";
+                document.getElementById("chatInputArea").style.display = "block";
+                document.getElementById("messageList").innerHTML = "";
+                displayedMsgIds.clear();
+                initEditor();
+                return;
+            }
+
+            let res = await fetch("/chat/join", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({room_id: roomId, password, nick})
+            });
+            let data = await res.json();
+
+            if(data.code === 0) {
+                currentRoomId = roomId;
+                currentRoomName = data.name;
+                localStorage.setItem("chat_current_room", roomId);
+                localStorage.setItem("chat_current_room_name", data.name);
+                localStorage.setItem("last_room_id", roomId);
+                localStorage.setItem("last_nickname", nick);
+                document.getElementById("roomTitle").textContent = currentRoomName;
+                document.getElementById("chatHeader").style.display = "flex";
+                document.getElementById("chatInputArea").style.display = "block";
+                document.getElementById("messageList").innerHTML = "";
+                
+                displayedMsgIds.clear();
+                renderMessages(data.messages);
+                if(data.messages.length > 0) {
+                    lastMsgId = data.messages[data.messages.length - 1].id;
+                }
+                
+                initEditor();
+                startRecvLoop();
+            } else {
+                alert(data.msg);
+            }
+        }
+        
+        async function leaveRoom() {
+            if(!currentRoomId) return;
+            
+            if(window.chatEditor) {
+                window.chatEditor.destroy();
+                window.chatEditor = null;
+            }
+            
+            wsLeaveRoom();
+            
+            await fetch("/chat/leave", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({room_id: currentRoomId})
+            });
+            
+            stopRecvLoop();
+            currentRoomId = "";
+            currentRoomName = "";
+            lastMsgId = "";
+            emptyMsgCount = 0;
+            errorCount = 0;
+            setPollInterval(MIN_POLL_INTERVAL);
+            hideReconnectionPrompt();
+            
+            localStorage.removeItem("chat_current_room");
+            localStorage.removeItem("chat_current_room_name");
+            
+            document.getElementById("chatHeader").style.display = "none";
+            document.getElementById("chatInputArea").style.display = "none";
+            document.getElementById("messageList").innerHTML = '<div class="no-room">请选择或创建一个房间开始聊天</div>';
+            
+            await refreshRoomList();
+        }
+        
+        function startRecvLoop() {
+            stopRecvLoop();
+            emptyMsgCount = 0;
+            errorCount = 0;
+            setPollInterval(MIN_POLL_INTERVAL);
+            hideReconnectionPrompt();
+            lastRecvActivity = Date.now();
+            startWatchdog();
+            recvMessages();
+        }
+        
+        function stopRecvLoop() {
+            if(recvInterval) {
+                clearTimeout(recvInterval);
+                recvInterval = null;
+            }
+            emptyMsgCount = 0;
+            errorCount = 0;
+            stopWatchdog();
+        }
+        
+        async function recvMessages() {
+            if(!currentRoomId) return;
+            
+            if(wsConnected) {
+                recvInterval = null;
+                lastRecvActivity = Date.now();
+                return;
+            }
+            
+            try {
+                let url = `/chat/recv?room_id=${currentRoomId}&last_id=${lastMsgId}`;
+                let res = await fetch(url, {timeout: 10000});
+                let data = await res.json();
+                lastRecvActivity = Date.now();
+                
+                if(data.code === 0) {
+                    errorCount = 0;
+                    hideReconnectionPrompt();
+                    
+                    if(data.messages && data.messages.length > 0) {
+                        emptyMsgCount = 0;
+                        setPollInterval(MIN_POLL_INTERVAL);
+                        renderMessages(data.messages);
+                        lastMsgId = data.messages[data.messages.length - 1].id;
+                        scrollToBottom();
+                    } else {
+                        emptyMsgCount++;
+                        updatePollInterval();
+                    }
+                } else {
+                    emptyMsgCount = 0;
+                    errorCount++;
+                    if(errorCount >= ERROR_THRESHOLD) {
+                        showReconnectionPrompt();
+                    } else if(errorCount > 0) {
+                        updateConnectionStatus("reconnecting");
+                    }
+                }
+            } catch(e) {
+                emptyMsgCount = 0;
+                errorCount++;
+                if(errorCount >= ERROR_THRESHOLD) {
+                    showReconnectionPrompt();
+                } else if(errorCount > 0) {
+                    updateConnectionStatus("reconnecting");
+                }
+            }
+            
+            recvInterval = setTimeout(recvMessages, currentPollInterval);
+        }
+        
+        function renderMessages(messages) {
+            let container = document.getElementById("messageList");
+            
+            messages.forEach(msg => {
+                if(displayedMsgIds.has(msg.id)) {
+                    return;
+                }
+                displayedMsgIds.add(msg.id);
+                
+                let time = new Date(msg.timestamp * 1000).toLocaleTimeString("zh-CN", {hour:"2-digit", minute:"2-digit", second:"2-digit"});
+                
+                let avatar = htmlEscape(msg.nick).charAt(0).toUpperCase();
+                let color = getNickColor(msg.nick);
+                
+                let div = document.createElement("div");
+                div.className = "message-item";
+                if(msg.id.startsWith("temp_")) {
+                    div.setAttribute("data-temp-id", msg.id);
+                }
+                
+                let avatarDiv = document.createElement("div");
+                avatarDiv.className = "message-avatar";
+                avatarDiv.style.background = color;
+                avatarDiv.textContent = avatar;
+                div.appendChild(avatarDiv);
+                
+                let contentDiv = document.createElement("div");
+                contentDiv.className = "message-content";
+                
+                let headerDiv = document.createElement("div");
+                headerDiv.className = "message-header";
+                
+                let nickSpan = document.createElement("span");
+                nickSpan.className = "message-nick";
+                nickSpan.textContent = msg.nick;
+                headerDiv.appendChild(nickSpan);
+                
+                let timeSpan = document.createElement("span");
+                timeSpan.className = "message-time";
+                timeSpan.textContent = time;
+                headerDiv.appendChild(timeSpan);
+                
+                contentDiv.appendChild(headerDiv);
+                
+                let bodyDiv = document.createElement("div");
+                bodyDiv.className = "message-body";
+                bodyDiv.innerHTML = msg.content;
+                contentDiv.appendChild(bodyDiv);
+                
+                div.appendChild(contentDiv);
+                container.appendChild(div);
+            });
+            
+            scrollToBottom();
+        }
+        
+        function scrollToBottom() {
+            let container = document.getElementById("messageList");
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        function cleanAutoLinks(text) {
+            text = text.replace(/\[url=([^\]]+)\]\1\[\/url\]/gi, '$1');
+            text = text.replace(/\[url\]([^[]+)\[\/url\]/gi, '$1');
+            text = text.replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/gi, '$2');
+            text = text.replace(/\[img\](<a\s+[^>]*href=["']([^"']+)["'][^>]*>[^<]+<\/a>)\[\/img\]/gi, '[img]$2[/img]');
+            text = text.replace(/\[img\](\[url=([^\]]+)\]\2\[\/url\])\[\/img\]/gi, '[img]$2[/img]');
+            return text;
+        }
+        
+        async function sendMessage() {
+            if(!currentRoomId) {
+                alert("请先加入一个房间");
+                return;
+            }
+            
+            let content = "";
+            if(window.chatEditor && typeof window.chatEditor.val === 'function') {
+                content = window.chatEditor.val().trim();
+            } else {
+                let textarea = document.getElementById("chatInput");
+                content = textarea ? textarea.value.trim() : "";
+            }
+            
+            if(!content) {
+                return;
+            }
+            
+            if(content.length > 2000) {
+                alert("消息内容不能超过2000字");
+                return;
+            }
+            
+            content = cleanAutoLinks(content);
+            
+            let btn = document.getElementById("sendBtn");
+            btn.disabled = true;
+            let originalText = btn.innerHTML;
+            btn.innerHTML = '<span>发送中…</span><span style="font-size:12px;">⟳</span>';
+            
+            let nick = document.getElementById("currentNick").textContent;
+            let tempMsgId = "temp_" + Date.now();
+            
+            let tempMsg = {
+                id: tempMsgId,
+                nick: nick,
+                content: parseSimpleBbcode(content),
+                timestamp: Date.now() / 1000
+            };
+            
+            renderMessages([tempMsg]);
+            
+            if(window.chatEditor && typeof window.chatEditor.val === 'function') {
+                window.chatEditor.val("");
+            } else {
+                let textarea = document.getElementById("chatInput");
+                if(textarea) textarea.value = "";
+            }
+            
+            if(wsIsOpen() && wsSendMsg(content)) {
+                displayedMsgIds.delete(tempMsgId);
+                emptyMsgCount = 0;
+                setPollInterval(MIN_POLL_INTERVAL);
+            } else {
+                try {
+                    let res = await fetch("/chat/send", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({room_id: currentRoomId, content, nick})
+                    });
+                    let data = await res.json();
+                    
+                    if(data.code === 0) {
+                        if(data.message && data.message.id) {
+                            displayedMsgIds.delete(tempMsgId);
+                            lastMsgId = data.message.id;
+                            let container = document.getElementById("messageList");
+                            let tempItems = container.querySelectorAll('[data-temp-id="' + tempMsgId + '"]');
+                            tempItems.forEach(item => item.remove());
+                        }
+                        emptyMsgCount = 0;
+                        setPollInterval(MIN_POLL_INTERVAL);
+                        if(recvInterval) {
+                            clearTimeout(recvInterval);
+                            recvInterval = null;
+                        }
+                        if(!wsConnected) {
+                            recvMessages();
+                        }
+                    } else {
+                        displayedMsgIds.delete(tempMsgId);
+                        let container = document.getElementById("messageList");
+                        let tempItems = container.querySelectorAll('[data-temp-id="' + tempMsgId + '"]');
+                        tempItems.forEach(item => item.remove());
+                        if(window.chatEditor && typeof window.chatEditor.val === 'function') {
+                            window.chatEditor.val(content);
+                        } else {
+                            let textarea = document.getElementById("chatInput");
+                            if(textarea) textarea.value = content;
+                        }
+                        alert(data.msg);
+                    }
+                } catch(e) {
+                    displayedMsgIds.delete(tempMsgId);
+                    let container = document.getElementById("messageList");
+                    let tempItems = container.querySelectorAll('[data-temp-id="' + tempMsgId + '"]');
+                    tempItems.forEach(item => item.remove());
+                    if(window.chatEditor && typeof window.chatEditor.val === 'function') {
+                        window.chatEditor.val(content);
+                    } else {
+                        let textarea = document.getElementById("chatInput");
+                        if(textarea) textarea.value = content;
+                    }
+                    alert("发送失败，请重试");
+                }
+            }
+            
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+            if(window.chatEditor && typeof window.chatEditor.focus === 'function') {
+                window.chatEditor.focus();
+            }
+        }
+        
+        function initEditorResize() {
+            let handle = document.getElementById("editorResizeHandle");
+            if(!handle) return;
+            
+            let isDragging = false;
+            let startY = 0;
+            let startHeight = 0;
+            let container = document.querySelector(".chat-input-wrapper .editor-container");
+            let minHeight = 100;
+            let maxHeight = 500;
+            
+            handle.addEventListener("mousedown", function(e) {
+                e.preventDefault();
+                isDragging = true;
+                startY = e.clientY;
+                startHeight = container.offsetHeight;
+                handle.classList.add("dragging");
+                document.body.style.cursor = "ns-resize";
+                document.body.style.userSelect = "none";
+            });
+            
+            document.addEventListener("mousemove", function(e) {
+                if(!isDragging) return;
+                let deltaY = startY - e.clientY;
+                let newHeight = startHeight + deltaY;
+                newHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
+                container.style.height = newHeight + "px";
+                if(window.chatEditor && typeof window.chatEditor.height === 'function') {
+                    window.chatEditor.height(newHeight - 10);
+                }
+            });
+            
+            document.addEventListener("mouseup", function() {
+                if(isDragging) {
+                    isDragging = false;
+                    handle.classList.remove("dragging");
+                    document.body.style.cursor = "";
+                    document.body.style.userSelect = "";
+                }
+            });
+        }
+        
+        function getNickColor(nick) {
+            let hash = 0;
+            for(let i=0; i<nick.length; i++) {
+                hash = nick.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            let colors = ["#0066cc", "#009933", "#cc6600", "#9933cc", "#3399cc", "#cc3333", "#669900"];
+            return colors[Math.abs(hash) % colors.length];
+        }
+        
+        function openNickModal() {
+            document.getElementById("newNick").value = document.getElementById("currentNick").textContent;
+            document.getElementById("nickModal").classList.add("show");
+        }
+        
+        function closeNickModal() {
+            document.getElementById("nickModal").classList.remove("show");
+        }
+        
+        async function changeNick() {
+            let nick = document.getElementById("newNick").value.trim();
+            if(!nick) {
+                alert("请输入昵称");
+                return;
+            }
+            
+            let res = await fetch("/chat/set_nick", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({nick})
+            });
+            let data = await res.json();
+            
+            if(data.code === 0) {
+                document.getElementById("currentNick").textContent = data.nick;
+                localStorage.setItem("chat_nick", data.nick);
+                closeNickModal();
+                alert("昵称修改成功");
+            } else {
+                alert(data.msg);
+            }
+        }
+        
+        function toggleBbcodeHelp() {
+            document.getElementById("bbcodeHelp").classList.toggle("show");
+        }
+
+        let wsUnavailable = false;
+        function initWebSocket() {
+            if(!window.WebSocket) {
+                console.info("WebSocket 不可用，使用 HTTP 轮询");
+                if(currentRoomId) startRecvLoop();
+                return false;
+            }
+            if(wsUnavailable) {
+                console.info("服务器不支持 WebSocket，使用 HTTP 轮询");
+                if(currentRoomId) startRecvLoop();
+                return false;
+            }
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${proto}//${location.host}/ws/chat`;
+            try {
+                ws = new WebSocket(wsUrl);
+                ws.onopen = function() {
+                    wsConnected = true;
+                    wsReconnectAttempts = 0;
+                    hideReconnectionPrompt();
+                    stopRecvLoop();
+                    if(currentRoomId && !wsJoinInProgress) {
+                        wsJoinRoom(currentRoomId);
+                    }
+                };
+                ws.onmessage = function(event) {
+                    let data;
+                    try {
+                        data = JSON.parse(event.data);
+                    } catch(e) {
+                        return;
+                    }
+                    if(data.error === 'WebSocket unavailable') {
+                        wsUnavailable = true;
+                        ws.close();
+                        console.info("服务器不支持 WebSocket，切换到 HTTP 轮询");
+                        if(currentRoomId) startRecvLoop();
+                        return;
+                    }
+                    handleWsMessage(data);
+                };
+                ws.onclose = function() {
+                    wsConnected = false;
+                    wsJoinInProgress = false;
+                    if(wsUnavailable) {
+                        return;
+                    }
+                    if(wsReconnectAttempts < WS_MAX_RECONNECT) {
+                        wsReconnectAttempts++;
+                        updateConnectionStatus("reconnecting");
+                        setTimeout(function() {
+                            if(!wsConnected) initWebSocket();
+                        }, 1000 * wsReconnectAttempts);
+                    } else {
+                        showReconnectionPrompt();
+                        wsReconnectAttempts = 0;
+                        if(currentRoomId) {
+                            console.warn("WebSocket 重连次数耗尽，回退到 HTTP 轮询");
+                            startRecvLoop();
+                        }
+                    }
+                };
+                ws.onerror = function() {
+                    wsConnected = false;
+                };
+                return true;
+            } catch(e) {
+                console.info("WebSocket 连接失败，使用 HTTP 轮询:", e);
+                if(currentRoomId) startRecvLoop();
+                return false;
+            }
+        }
+
+        function wsIsOpen() {
+            return ws && wsConnected && ws.readyState === WebSocket.OPEN;
+        }
+
+        function wsJoinRoom(roomId, password) {
+            if(!wsIsOpen()) return false;
+            wsJoinInProgress = true;
+            ws.send(JSON.stringify({
+                type: "join",
+                room_id: roomId,
+                password: password || ""
+            }));
+            return true;
+        }
+
+        function wsSendMsg(content) {
+            if(!wsIsOpen() || !currentRoomId) return false;
+            ws.send(JSON.stringify({
+                type: "message",
+                content: content
+            }));
+            return true;
+        }
+
+        function wsLeaveRoom() {
+            if(wsIsOpen()) {
+                ws.send(JSON.stringify({type: "leave"}));
+            }
+        }
+
+        function handleWsMessage(data) {
+            switch(data.type) {
+                case "message":
+                    let nickEl = document.getElementById("currentNick");
+                    if(nickEl && data.nick === nickEl.textContent) {
+                        let container = document.getElementById("messageList");
+                        let tempItems = container.querySelectorAll('[data-temp-id^="temp_"]');
+                        tempItems.forEach(item => item.remove());
+                    }
+                    renderMessages([data]);
+                    lastMsgId = data.id;
+                    scrollToBottom();
+                    break;
+                case "joined":
+                    currentRoomName = data.name || currentRoomName;
+                    if(currentRoomName) {
+                        document.getElementById("roomTitle").textContent = currentRoomName;
+                    }
+                    if(data.messages && data.messages.length > 0) {
+                        renderMessages(data.messages);
+                        lastMsgId = data.messages[data.messages.length - 1].id;
+                    }
+                    wsJoinInProgress = false;
+                    hideReconnectionPrompt();
+                    break;
+                case "error":
+                    wsJoinInProgress = false;
+                    if(data.message && (
+                        data.message.indexOf("密码") >= 0 ||
+                        data.message.indexOf("不存在") >= 0 ||
+                        data.message.indexOf("不能为空") >= 0
+                    )) {
+                        alert(data.message);
+                    }
+                    break;
+            }
+        }
+
+        // 页面加载时恢复记忆的房间和昵称
+        document.addEventListener("DOMContentLoaded", function() {
+            let savedRoomId = localStorage.getItem("last_room_id");
+            let savedNickname = localStorage.getItem("last_nickname");
+
+            if(savedRoomId) {
+                let roomIdInput = document.getElementById("joinRoomId");
+                if(roomIdInput) roomIdInput.value = savedRoomId;
+            }
+
+            if(savedNickname) {
+                let nicknameInput = document.getElementById("newNick");
+                if(nicknameInput) nicknameInput.value = savedNickname;
+            }
+        });
+
+        init();
+    </script>
+    <script src="/live2d/dist/autoload.js?v=2"></script>
+</body>
+</html>

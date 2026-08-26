@@ -3,6 +3,8 @@
 server_uploads/
 temp_uploads/
 logs/
+.secret
+data/
 
 *.bat
 *.vbs
@@ -14,6 +16,10 @@ LICENSE
 *.py
 !app.py
 !inforun.py
+!version.py
+!gui.py
+!main.py
+!monitor.py
 
 # emm...
 *.moc

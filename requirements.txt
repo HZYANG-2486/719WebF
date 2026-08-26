@@ -1,0 +1,25 @@
+# 719WebF 依赖库列表
+# 安装: pip install -r requirements.txt
+
+# Web 框架
+flask>=3.0
+werkzeug>=3.0
+
+# 生产 WSGI 服务器
+waitress>=3.0
+
+# 系统托盘
+pystray>=0.19
+
+# 图像处理（托盘图标 + PIL）
+pillow>=10.0
+
+# BBCode 渲染（聊天室消息格式化）
+bbcode>=1.1
+
+# 可选：Cloudflare 风格错误页（缺失时自动回退纯文本）
+cloudflare_error_page>=0.1
+
+# WebSocket 支持（聊天室实时消息）
+flask-sock>=0.7
+gevent>=24.0
