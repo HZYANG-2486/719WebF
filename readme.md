@@ -19,7 +19,7 @@
 5. 服务监控(实现仍有问题!)
 6. ~~AI使用~~
 7. 看板娘(你可以关闭, 基于[live2d-widget](https://github.com/stevenjoezhang/live2d-widget)做了部分修改)
-8. 自建保护系统 ~~(这...(⊙ˍ⊙))~~ 进行防DDOS防护 (~~主要除非你是嘉豪应该不会乱搞吧owo~~)
+8. 自建保护系统 ~~(无言以对了...)~~ 进行防DDOS防护 (~~主要除非你是嘉豪应该不会乱搞吧owo~~)
 9. 后台静默运行
 
 ## 使用方法
@@ -73,8 +73,9 @@ Cloudflare_error_page使用MIT授权
 ## 使用的项目
 
 - [live2d-widget](https://github.com/stevenjoezhang/live2d-widget)
-- [Flask-Humanify](https://github.com/tn3w/flask-Humanify)
 - [Cloudflare-error-page](https://github.com/donlon/cloudflare-error-page)
+- [chart.js](https://github.com/chartjs)
+- [SCEditor](https://github.com/samclarke/SCEditor)
 
 ## 人物版权
 
