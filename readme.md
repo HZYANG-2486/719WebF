@@ -2,11 +2,11 @@
 
 一个在班级以内共享文件的服务...
 
-
-
-
-
-
+<img src='https://badgen.net/badge/icon/Python?icon=python&label'></img>
+<img src='https://badgen.net/static/Powered%20By/Flask/blue'></img><br>
+<img src='https://badgen.net/github/license/HZYANG-2486/719WebF'></img>
+<img src='https://badgen.net/github/releases/HZYANG-2486/719WebF'></img>
+<img src='https://badgen.net/github/tag/HZYANG-2486/719WebF'></img>
 
 <!--生草的加了点东西 -->
 <!--不是东西呢owo-->
