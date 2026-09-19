@@ -9,6 +9,7 @@
 
 
 <!--生草的加了点东西 -->
+<!--不是东西呢owo-->
 
 ## 特性
 
@@ -59,9 +60,9 @@ pip install -r requirements.txt
 
 ### 配置文件
 
-项目的配置存储在程序目录下的一个叫'config.xml'
+项目的配置存储存储于'config.xml'
 
-你可通过右键托盘启动设置修改配置
+你可通过右键托盘修改配置
 
 或是通过直接修改xml文件进行配置
 
@@ -83,7 +84,7 @@ Cloudflare_error_page使用MIT授权
 
 ## 更多
 
-Live2D 相关代码的使用请遵守对应的许可：
+Live2D 相关代码的使用请**遵守对应的许可**：
 
 Live2D Cubism SDK 2.1 的许可证：
 Live2D SDK License Agreement (Public)
