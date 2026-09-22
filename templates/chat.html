@@ -4,6 +4,8 @@
     <meta charset="utf-8">
     <title>{{title}} | 聊天室</title>
     <link rel="stylesheet" href="/static/sceditor/themes/default.min.css">
+    {% from "_page_title.html" import page_title, title_css with context %}
+    {{ title_css(44) }}
     <style>
         *{box-sizing:border-box;margin:0;padding:0;}
         body{font-family:"PingFang SC","Microsoft Yahei","Segoe UI",Arial,sans-serif;height:100vh;display:flex;flex-direction:column;background:#f5f7fb;-webkit-font-smoothing:antialiased;}
@@ -44,6 +46,11 @@
         .chat-header h2{font-size:16px;font-weight:600;color:#1e293b;}
         
         .message-list{flex:1;overflow-y:auto;padding:20px;background:linear-gradient(180deg,#f8fafc 0%,#f1f5f9 100%);scrollbar-width:thin;scrollbar-color:#cbd5e1 transparent;}
+        /* 管理员模式：仅在管理模式显示删除按钮 */
+        .admin-delete-btn{display:none;align-self:flex-start;margin-left:8px;padding:2px 8px;font-size:12px;border:1px solid #fca5a5;background:#fef2f2;color:#dc2626;border-radius:6px;cursor:pointer;}
+        .admin-delete-btn:hover{background:#fee2e2;}
+        body.admin-mode .admin-delete-btn{display:inline-block;}
+        body.admin-mode .message-item{outline:1px dashed #fecaca;outline-offset:4px;border-radius:8px;}
         .message-list::-webkit-scrollbar{width:6px;}
         .message-list::-webkit-scrollbar-track{background:transparent;}
         .message-list::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px;}
@@ -61,6 +68,22 @@
         .message-body a:hover{text-decoration:underline;}
         .message-body img{max-width:100%;height:auto;border-radius:8px;vertical-align:middle;cursor:zoom-in;transition:opacity 0.2s;}
         .message-body img:hover{opacity:0.9;}
+        
+        .img-lightbox{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:none;align-items:center;justify-content:center;z-index:2000;cursor:zoom-out;padding:24px;backdrop-filter:blur(4px);}
+        .img-lightbox.show{display:flex;}
+        .img-lightbox img{max-width:100%;max-height:calc(100vh - 48px);object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);cursor:default;transition:transform 0.15s ease-out;}
+        .img-lightbox img.zoomed{cursor:grab;}
+        .img-lightbox img.dragging{cursor:grabbing;transition:none;}
+        .img-lightbox-close{position:absolute;top:16px;right:20px;width:40px;height:40px;border-radius:50%;border:none;background:rgba(255,255,255,0.14);color:#fff;font-size:22px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s, transform 0.2s;z-index:3;backdrop-filter:blur(6px);}
+        .img-lightbox-close:hover{background:rgba(255,255,255,0.28);transform:scale(1.06);}
+        .img-lightbox-hint{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.72);font-size:12.5px;background:rgba(0,0,0,0.4);padding:6px 14px;border-radius:20px;user-select:none;white-space:nowrap;z-index:3;}
+        .img-lightbox-open{position:absolute;top:16px;left:20px;color:#fff;background:rgba(255,255,255,0.14);padding:9px 16px;border-radius:20px;font-size:13px;text-decoration:none;transition:background 0.2s;z-index:3;white-space:nowrap;backdrop-filter:blur(6px);}
+        .img-lightbox-open:hover{background:rgba(255,255,255,0.28);}
+        @media (max-width: 640px) {
+            .img-lightbox-hint{font-size:11px;padding:5px 10px;}
+            .img-lightbox{padding:12px;}
+            .img-lightbox img{max-height:calc(100vh - 24px);}
+        }
         .chat-file-link{display:inline-flex;align-items:center;gap:6px;color:#0066cc;text-decoration:none;padding:6px 12px;background:#f0f7ff;border-radius:8px;font-size:13px;border:1px solid #cce5ff;transition:background 0.2s, border-color 0.2s;}
         .chat-file-link:hover{background:#e6f0ff;border-color:#0066cc;}
         
@@ -120,7 +143,7 @@
 </head>
 <body>
     <div class="header">
-        <h1>💬 聊天室</h1>
+        <h1>{{ page_title('chat', '聊天室', '💬') }}</h1>
         <div class="header-right">
             <div class="nick-display">
                 <span>昵称:</span>
@@ -128,6 +151,8 @@
                 <button class="btn" style="padding:2px 8px;font-size:12px;" onclick="openNickModal()">修改</button>
             </div>
             <button class="btn btn-primary" onclick="openCreateModal()">创建房间</button>
+            <button class="btn" id="adminToggleBtnTop" style="display:none;" onclick="toggleAdminMode()" title="管理员模式">管理员登录</button>
+            <button class="btn" id="adminLogoutBtnTop" style="display:none;" onclick="adminLogout()">退出管理</button>
         </div>
     </div>
     
@@ -151,6 +176,8 @@
                         <span class="conn-dot"></span>
                         <span class="conn-text">已连接</span>
                     </span>
+                    <button class="btn" id="adminToggleBtn" style="display:none;" onclick="toggleAdminMode()" title="管理员模式">管理</button>
+                    <button class="btn" id="adminLogoutBtn" style="display:none;" onclick="adminLogout()">退出管理</button>
                     <button class="btn" onclick="leaveRoom()">离开房间</button>
                 </div>
             </div>
@@ -233,6 +260,37 @@
                 <button class="btn btn-primary" onclick="changeNick()">确定</button>
             </div>
         </div>
+    </div>
+    
+    <!-- 管理员登录模态框 -->
+    <div class="modal-overlay" id="adminModal">
+        <div class="modal">
+            <h3>管理员登录</h3>
+            <div class="form-group">
+                <label for="adminUser">用户名</label>
+                <input type="text" id="adminUser" name="adminUser" placeholder="管理员用户名" autocomplete="username">
+            </div>
+            <div class="form-group" id="adminPassGroup">
+                <label for="adminPass">密码</label>
+                <input type="password" id="adminPass" name="adminPass" placeholder="密码" autocomplete="current-password">
+            </div>
+            <div class="form-group" id="adminTotpGroup">
+                <label for="adminTotp">动态验证码</label>
+                <input type="text" id="adminTotp" name="adminTotp" placeholder="6 位验证码" inputmode="numeric" autocomplete="one-time-code">
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeAdminModal()">取消</button>
+                <button class="btn btn-primary" onclick="adminLogin()">登录</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 图片放大查看 -->
+    <div class="img-lightbox" id="imgLightbox">
+        <button class="img-lightbox-close" id="imgLightboxClose" type="button" aria-label="关闭">×</button>
+        <a class="img-lightbox-open" id="imgLightboxOpen" href="#" target="_blank" rel="noopener noreferrer">在新标签页打开</a>
+        <img id="imgLightboxImg" src="" alt="放大查看">
+        <div class="img-lightbox-hint">滚轮或双击缩放 · 放大后拖动平移 · 点击空白或按 Esc 关闭</div>
     </div>
     
     <script src="/static/sceditor/sceditor.min.js"></script>
@@ -584,6 +642,9 @@
         
         
         async function init() {
+            // 能进到这里说明安全验证已通过，清掉验证页的重试计数
+            try { sessionStorage.removeItem("waf_solve_rounds"); } catch(e) {}
+            initImageLightbox();
             await loadNick();
             await refreshRoomList();
             await tryRejoinRoom();
@@ -935,9 +996,7 @@
                 
                 let div = document.createElement("div");
                 div.className = "message-item";
-                if(msg.id.startsWith("temp_")) {
-                    div.setAttribute("data-temp-id", msg.id);
-                }
+                div.setAttribute("data-msg-id", msg.id);
                 
                 let avatarDiv = document.createElement("div");
                 avatarDiv.className = "message-avatar";
@@ -966,7 +1025,16 @@
                 let bodyDiv = document.createElement("div");
                 bodyDiv.className = "message-body";
                 bodyDiv.innerHTML = msg.content;
+                autolinkElement(bodyDiv);
                 contentDiv.appendChild(bodyDiv);
+                
+                // 管理员模式下的删除按钮
+                let delBtn = document.createElement("button");
+                delBtn.className = "admin-delete-btn";
+                delBtn.textContent = "删除";
+                delBtn.title = "删除这条消息";
+                delBtn.onclick = function() { deleteMessage(msg.id); };
+                div.appendChild(delBtn);
                 
                 div.appendChild(contentDiv);
                 container.appendChild(div);
@@ -975,17 +1043,195 @@
             scrollToBottom();
         }
         
+        var FRONT_URL_RE = /(https?:\/\/[^\s<>"'）】」”’]+)/gi;
+        var FRONT_URL_JUNK = '.,;:!?)]}。，！？）》」”’';
+
+        function autolinkElement(root) {
+            if(!root) return;
+            var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+            var targets = [];
+            var node;
+            while((node = walker.nextNode())) {
+                if(node.parentNode && node.parentNode.nodeName === 'A') continue;
+                if(node.parentNode && (node.parentNode.nodeName === 'CODE' || node.parentNode.nodeName === 'PRE')) continue;
+                if(node.nodeValue && node.nodeValue.indexOf('http') !== -1) {
+                    targets.push(node);
+                }
+            }
+            targets.forEach(function(textNode) {
+                var text = textNode.nodeValue;
+                if(!FRONT_URL_RE.test(text)) return;
+                FRONT_URL_RE.lastIndex = 0;
+                var frag = document.createDocumentFragment();
+                var lastIndex = 0;
+                var m;
+                while((m = FRONT_URL_RE.exec(text)) !== null) {
+                    var raw = m[0];
+                    var trail = '';
+                    while(raw.length && FRONT_URL_JUNK.indexOf(raw.charAt(raw.length - 1)) !== -1) {
+                        trail = raw.charAt(raw.length - 1) + trail;
+                        raw = raw.slice(0, -1);
+                    }
+                    if(!raw || !/^https?:\/\//i.test(raw)) continue;
+                    if(m.index > lastIndex) {
+                        frag.appendChild(document.createTextNode(text.slice(lastIndex, m.index)));
+                    }
+                    var a = document.createElement('a');
+                    a.href = raw;
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                    a.textContent = raw;
+                    frag.appendChild(a);
+                    if(trail) frag.appendChild(document.createTextNode(trail));
+                    lastIndex = m.index + m[0].length;
+                }
+                if(lastIndex === 0) return;
+                if(lastIndex < text.length) {
+                    frag.appendChild(document.createTextNode(text.slice(lastIndex)));
+                }
+                textNode.parentNode.replaceChild(frag, textNode);
+            });
+        }
+        
+        var lightboxScale = 1, lightboxX = 0, lightboxY = 0, lightboxDragging = false;
+        var lightboxDragStart = {x:0, y:0, ox:0, oy:0};
+
+        function applyLightboxTransform() {
+            var img = document.getElementById("imgLightboxImg");
+            if(!img) return;
+            img.style.transform = 'translate(' + lightboxX + 'px,' + lightboxY + 'px) scale(' + lightboxScale + ')';
+            img.classList.toggle('zoomed', lightboxScale > 1);
+        }
+
+        function resetLightboxTransform() {
+            lightboxScale = 1;
+            lightboxX = 0;
+            lightboxY = 0;
+            applyLightboxTransform();
+        }
+
+        function openImageLightbox(src) {
+            if(!src) return;
+            var box = document.getElementById("imgLightbox");
+            var img = document.getElementById("imgLightboxImg");
+            var openLink = document.getElementById("imgLightboxOpen");
+            if(!box || !img) return;
+            img.src = src;
+            if(openLink) openLink.href = src;
+            resetLightboxTransform();
+            box.classList.add("show");
+            document.body.style.overflow = "hidden";
+        }
+
+        function closeImageLightbox() {
+            var box = document.getElementById("imgLightbox");
+            if(!box) return;
+            box.classList.remove("show");
+            document.body.style.overflow = "";
+            resetLightboxTransform();
+            var img = document.getElementById("imgLightboxImg");
+            if(img) img.src = "";
+        }
+
+        function initImageLightbox() {
+            var box = document.getElementById("imgLightbox");
+            var img = document.getElementById("imgLightboxImg");
+            var closeBtn = document.getElementById("imgLightboxClose");
+            if(!box || !img) return;
+
+            // 消息区图片点击放大（事件委托，兼容后插入的消息）
+            var list = document.getElementById("messageList");
+            if(list) {
+                list.addEventListener("click", function(e) {
+                    var target = e.target;
+                    if(target && target.tagName === "IMG" && target.closest(".message-body")) {
+                        e.preventDefault();
+                        openImageLightbox(target.currentSrc || target.src);
+                    }
+                });
+            }
+
+            closeBtn.addEventListener("click", function(e) {
+                e.stopPropagation();
+                closeImageLightbox();
+            });
+
+            // 点击空白区域关闭（点在图片上不关闭）
+            box.addEventListener("click", function(e) {
+                if(e.target === box) closeImageLightbox();
+            });
+
+            // 滚轮缩放
+            box.addEventListener("wheel", function(e) {
+                e.preventDefault();
+                var step = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+                lightboxScale = Math.min(8, Math.max(0.4, lightboxScale * step));
+                if(lightboxScale <= 1) {
+                    lightboxX = 0;
+                    lightboxY = 0;
+                }
+                applyLightboxTransform();
+            }, {passive: false});
+
+            // 双击放大/还原
+            img.addEventListener("dblclick", function(e) {
+                e.stopPropagation();
+                lightboxScale = lightboxScale > 1 ? 1 : 2;
+                lightboxX = 0;
+                lightboxY = 0;
+                applyLightboxTransform();
+            });
+
+            // 拖动平移
+            img.addEventListener("mousedown", function(e) {
+                if(lightboxScale <= 1) return;
+                e.preventDefault();
+                lightboxDragging = true;
+                img.classList.add("dragging");
+                lightboxDragStart = {x: e.clientX, y: e.clientY, ox: lightboxX, oy: lightboxY};
+            });
+            document.addEventListener("mousemove", function(e) {
+                if(!lightboxDragging) return;
+                lightboxX = lightboxDragStart.ox + (e.clientX - lightboxDragStart.x);
+                lightboxY = lightboxDragStart.oy + (e.clientY - lightboxDragStart.y);
+                applyLightboxTransform();
+            });
+            document.addEventListener("mouseup", function() {
+                if(!lightboxDragging) return;
+                lightboxDragging = false;
+                var im = document.getElementById("imgLightboxImg");
+                if(im) im.classList.remove("dragging");
+            });
+
+            // Esc 关闭
+            document.addEventListener("keydown", function(e) {
+                if(e.key === "Escape" && box.classList.contains("show")) {
+                    closeImageLightbox();
+                }
+            });
+        }
+
         function scrollToBottom() {
             let container = document.getElementById("messageList");
             container.scrollTop = container.scrollHeight;
         }
         
         function cleanAutoLinks(text) {
-            text = text.replace(/\[url=([^\]]+)\]\1\[\/url\]/gi, '$1');
-            text = text.replace(/\[url\]([^[]+)\[\/url\]/gi, '$1');
-            text = text.replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/gi, '$2');
-            text = text.replace(/\[img\](<a\s+[^>]*href=["']([^"']+)["'][^>]*>[^<]+<\/a>)\[\/img\]/gi, '[img]$2[/img]');
+            // SCEditor 的 bbcode 插件会把裸链接转成 <a href="X">X</a>。
+            // 这里把它还原成裸链接形式，交由服务端统一生成 <a> 标签，
+            // 避免出现"显示为文本但不可点击"的情况。
+            text = text.replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi, function(m, href, label) {
+                var textLabel = label.replace(/&amp;/g, '&').trim();
+                var plainHref = href.replace(/&amp;/g, '&').trim();
+                if(!textLabel || textLabel === plainHref) {
+                    return plainHref;
+                }
+                // 有自定义锚文本时，转成标准 bbcode，保留可点击能力
+                return '[url=' + plainHref + ']' + textLabel + '[/url]';
+            });
+            text = text.replace(/\[img\](<a\s+[^>]*href=["']([^"']+)["'][^>]*>[^<]*<\/a>)\[\/img\]/gi, '[img]$2[/img]');
             text = text.replace(/\[img\](\[url=([^\]]+)\]\2\[\/url\])\[\/img\]/gi, '[img]$2[/img]');
+            text = text.replace(/\[url=([^\]]+)\]\1\[\/url\]/gi, '[url=$1]$1[/url]');
             return text;
         }
         
@@ -1020,17 +1266,9 @@
             btn.innerHTML = '<span>发送中…</span><span style="font-size:12px;">⟳</span>';
             
             let nick = document.getElementById("currentNick").textContent;
-            let tempMsgId = "temp_" + Date.now();
             
-            let tempMsg = {
-                id: tempMsgId,
-                nick: nick,
-                content: parseSimpleBbcode(content),
-                timestamp: Date.now() / 1000
-            };
-            
-            renderMessages([tempMsg]);
-            
+            // 不在此处本地渲染（避免与服务端消息重复/顺序错乱/失败残留）。
+            // 仅清空输入框，等服务器确认后由 WS 广播或 /chat/send 返回的消息渲染。
             if(window.chatEditor && typeof window.chatEditor.val === 'function') {
                 window.chatEditor.val("");
             } else {
@@ -1039,7 +1277,6 @@
             }
             
             if(wsIsOpen() && wsSendMsg(content)) {
-                displayedMsgIds.delete(tempMsgId);
                 emptyMsgCount = 0;
                 setPollInterval(MIN_POLL_INTERVAL);
             } else {
@@ -1052,12 +1289,10 @@
                     let data = await res.json();
                     
                     if(data.code === 0) {
+                        // 服务端已确认：用它返回的权威消息渲染（含服务端 id/时间戳/净化后内容）
                         if(data.message && data.message.id) {
-                            displayedMsgIds.delete(tempMsgId);
+                            renderMessages([data.message]);
                             lastMsgId = data.message.id;
-                            let container = document.getElementById("messageList");
-                            let tempItems = container.querySelectorAll('[data-temp-id="' + tempMsgId + '"]');
-                            tempItems.forEach(item => item.remove());
                         }
                         emptyMsgCount = 0;
                         setPollInterval(MIN_POLL_INTERVAL);
@@ -1065,14 +1300,7 @@
                             clearTimeout(recvInterval);
                             recvInterval = null;
                         }
-                        if(!wsConnected) {
-                            recvMessages();
-                        }
                     } else {
-                        displayedMsgIds.delete(tempMsgId);
-                        let container = document.getElementById("messageList");
-                        let tempItems = container.querySelectorAll('[data-temp-id="' + tempMsgId + '"]');
-                        tempItems.forEach(item => item.remove());
                         if(window.chatEditor && typeof window.chatEditor.val === 'function') {
                             window.chatEditor.val(content);
                         } else {
@@ -1082,10 +1310,6 @@
                         alert(data.msg);
                     }
                 } catch(e) {
-                    displayedMsgIds.delete(tempMsgId);
-                    let container = document.getElementById("messageList");
-                    let tempItems = container.querySelectorAll('[data-temp-id="' + tempMsgId + '"]');
-                    tempItems.forEach(item => item.remove());
                     if(window.chatEditor && typeof window.chatEditor.val === 'function') {
                         window.chatEditor.val(content);
                     } else {
@@ -1187,9 +1411,184 @@
             }
         }
         
-        function toggleBbcodeHelp() {
-            document.getElementById("bbcodeHelp").classList.toggle("show");
+        // ===================== 管理员模式（仅用于删除问题消息） =====================
+        let adminMode = false;
+        let adminNeedPassword = true;
+        let adminNeedTotp = true;
+
+        // 入口按钮有两处：房间内头部 + 页面顶部（未进房间也能看到）
+        function _adminBtns() {
+            return {
+                toggles: [
+                    document.getElementById("adminToggleBtn"),
+                    document.getElementById("adminToggleBtnTop"),
+                ].filter(Boolean),
+                logouts: [
+                    document.getElementById("adminLogoutBtn"),
+                    document.getElementById("adminLogoutBtnTop"),
+                ].filter(Boolean),
+            };
         }
+        
+        async function refreshAdminStatus() {
+            try {
+                let res = await fetch("/admin/status");
+                let data = await res.json();
+                let {toggles, logouts} = _adminBtns();
+                if(!data.enabled) {
+                    toggles.forEach(b => b.style.display = "none");
+                    logouts.forEach(b => b.style.display = "none");
+                    adminMode = false;
+                    return;
+                }
+                adminNeedPassword = !!data.need_password;
+                adminNeedTotp = !!data.need_totp;
+                _applyAuthFields();
+                if(data.authed) {
+                    toggles.forEach(b => {
+                        b.style.display = "inline-block";
+                        b.textContent = adminMode ? "退出管理模式" : "管理";
+                    });
+                    logouts.forEach(b => b.style.display = "inline-block");
+                } else {
+                    toggles.forEach(b => {
+                        b.style.display = "inline-block";
+                        b.textContent = "管理员登录";
+                    });
+                    logouts.forEach(b => b.style.display = "none");
+                    adminMode = false;
+                }
+            } catch(e) { /* 忽略：管理功能不可用时不显示入口 */ }
+        }
+
+        // 根据服务端实际配置，只显示需要填写的字段
+        function _applyAuthFields() {
+            let passGroup = document.getElementById("adminPassGroup");
+            let totpGroup = document.getElementById("adminTotpGroup");
+            if(passGroup) passGroup.style.display = adminNeedPassword ? "" : "none";
+            if(totpGroup) totpGroup.style.display = adminNeedTotp ? "" : "none";
+        }
+        
+        function toggleAdminMode() {
+            let {toggles} = _adminBtns();
+            if(adminMode) {
+                adminMode = false;
+                toggles.forEach(b => b.textContent = "管理");
+                document.body.classList.remove("admin-mode");
+                refreshMessages();
+                return;
+            }
+            // 未登录则先弹登录框
+            fetch("/admin/status").then(r => r.json()).then(d => {
+                if(d.authed) {
+                    adminMode = true;
+                    document.body.classList.add("admin-mode");
+                    toggles.forEach(b => b.textContent = "退出管理模式");
+                    refreshMessages();
+                } else {
+                    _applyAuthFields();
+                    document.getElementById("adminModal").classList.add("show");
+                }
+            }).catch(() => {
+                document.getElementById("adminModal").classList.add("show");
+            });
+        }
+        
+        function closeAdminModal() {
+            document.getElementById("adminModal").classList.remove("show");
+        }
+        
+        async function adminLogin() {
+            let username = document.getElementById("adminUser").value.trim();
+            let password = document.getElementById("adminPass").value;
+            let totp_code = document.getElementById("adminTotp").value.trim();
+            // 只校验服务端实际启用的方式
+            if(!username) {
+                alert("请填写用户名");
+                return;
+            }
+            if(adminNeedPassword && !password) {
+                alert("请填写密码");
+                return;
+            }
+            if(adminNeedTotp && !totp_code) {
+                alert("请填写动态验证码");
+                return;
+            }
+            try {
+                let res = await fetch("/admin/login", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({username, password, totp_code})
+                });
+                let data = await res.json();
+                if(data.code === 0) {
+                    closeAdminModal();
+                    document.getElementById("adminPass").value = "";
+                    document.getElementById("adminTotp").value = "";
+                    adminMode = true;
+                    document.body.classList.add("admin-mode");
+                    await refreshAdminStatus();
+                    refreshMessages();
+                } else {
+                    alert(data.msg || "登录失败");
+                }
+            } catch(e) {
+                alert("登录失败，请重试");
+            }
+        }
+        
+        async function adminLogout() {
+            try {
+                await fetch("/admin/logout", {method: "POST"});
+            } catch(e) {}
+            adminMode = false;
+            document.body.classList.remove("admin-mode");
+            await refreshAdminStatus();
+            refreshMessages();
+        }
+        
+        async function deleteMessage(msgId) {
+            if(!adminMode) return;
+            if(!confirm("确定删除这条消息吗？此操作不可撤销。")) return;
+            try {
+                let res = await fetch("/chat/delete_message/" + encodeURIComponent(msgId), {
+                    method: "POST"
+                });
+                let data = await res.json();
+                if(data.code === 0) {
+                    // 从界面移除
+                    let container = document.getElementById("messageList");
+                    let el = container.querySelector('[data-msg-id="' + msgId + '"]');
+                    if(el) el.remove();
+                    displayedMsgIds.delete(msgId);
+                } else {
+                    alert(data.msg || "删除失败");
+                }
+            } catch(e) {
+                alert("删除失败，请重试");
+            }
+        }
+        
+        function refreshMessages() {
+            if(!currentRoomId) return;
+            displayedMsgIds.clear();
+            let container = document.getElementById("messageList");
+            if(container) container.innerHTML = "";
+            fetch("/chat/recv?room_id=" + encodeURIComponent(currentRoomId) + "&last_id=")
+                .then(r => r.json())
+                .then(d => {
+                    if(d.code === 0 && d.messages) {
+                        renderMessages(d.messages);
+                        if(d.messages.length > 0) {
+                            lastMsgId = d.messages[d.messages.length - 1].id;
+                        }
+                    }
+                }).catch(() => {});
+        }
+        
+        function toggleBbcodeHelp() {
+            document.getElementById("bbcodeHelp").classList.toggle("show");        }
 
         let wsUnavailable = false;
         function initWebSocket() {
@@ -1297,12 +1696,7 @@
         function handleWsMessage(data) {
             switch(data.type) {
                 case "message":
-                    let nickEl = document.getElementById("currentNick");
-                    if(nickEl && data.nick === nickEl.textContent) {
-                        let container = document.getElementById("messageList");
-                        let tempItems = container.querySelectorAll('[data-temp-id^="temp_"]');
-                        tempItems.forEach(item => item.remove());
-                    }
+                    // 消息仅在服务器确认后渲染；renderMessages 内部按 id 去重，天然避免重复
                     renderMessages([data]);
                     lastMsgId = data.id;
                     scrollToBottom();
@@ -1346,10 +1740,41 @@
                 let nicknameInput = document.getElementById("newNick");
                 if(nicknameInput) nicknameInput.value = savedNickname;
             }
+
+            // 查询管理功能状态，决定是否显示管理入口
+            refreshAdminStatus();
         });
 
         init();
     </script>
-    <script src="/live2d/dist/autoload.js?v=2"></script>
+    <script>
+        // 看板娘加载前先检测 WebGL 能力：
+        // 不支持时安静跳过（避免控制台反复报错），并给出友好提示。
+        (function() {
+            function detectWebGL() {
+                try {
+                    var c = document.createElement('canvas');
+                    var opts = {premultipliedAlpha: true, preserveDrawingBuffer: true};
+                    if(c.getContext('webgl2', opts)) return 'webgl2';
+                    if(c.getContext('webgl', opts)) return 'webgl1';
+                    if(c.getContext('experimental-webgl', opts)) return 'webgl1';
+                    return null;
+                } catch(e) {
+                    return null;
+                }
+            }
+            var mode = detectWebGL();
+            if(!mode) {
+                console.info('[看板娘] 当前浏览器未启用 WebGL，已跳过加载。开启浏览器「硬件加速」后刷新即可恢复。');
+                return;
+            }
+            var s = document.createElement('script');
+            s.src = '/live2d/dist/autoload.js?v=2';
+            s.onerror = function() {
+                console.info('[看板娘] 资源加载失败，已跳过。');
+            };
+            document.body.appendChild(s);
+        })();
+    </script>
 </body>
 </html>

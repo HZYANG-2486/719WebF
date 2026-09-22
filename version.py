@@ -1,9 +1,8 @@
-#719WEBF 版本信息 - 统一管理所有版本/名称常量
 #所有显示版本号的地方都从此文件获取
 
 APP_NAME = "719WEBF"
-APP_VER  = "V1.6"
-APP_DESC = "文件共享服务"
+APP_VER  = "Ver.1.6-Beta_3"
+APP_DESC = "万务文牍传递之器"
 APP_AUTHOR = "HZYANG"
 
 def get_version_string():

@@ -4,6 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }}</title>
+    {% from "_page_title.html" import page_title, title_css with context %}
+    {{ title_css(56) }}
     <style>
         body{
             text-align:center;
@@ -19,13 +21,18 @@
             margin-bottom: 40px;
             font-weight: normal;
             letter-spacing: 1px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
         .link{
             margin:20px auto;
             max-width: 280px;
         }
         a{
-            display: block;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             padding: 14px 20px;
             color:#0066cc;
             text-decoration:none;
@@ -54,14 +61,40 @@
             font-size: 14px;
             color: #7f8c8d;
         }
+        .mounted{
+            margin-top: 18px;
+            font-size: 13px;
+            color: #95a5a6;
+            letter-spacing: 1px;
+        }
+        .mounted-list{
+            margin: 8px auto 0;
+            width: 100%;
+            max-width: 280px;
+        }
+        .mounted-list a{
+            font-size: 16px;
+            padding: 11px 20px;
+            justify-content: flex-start;
+        }
     </style>
 </head>
 <body>
-    <h1>{{ title }}</h1>
+    {# 首页是"家"本身，标题不再跳回自己 #}
+    <h1>{{ page_title('home', title, '🏠', link_home=False) }}</h1>
     
-    <div class="link"><a href="/files/">📁 文件浏览</a></div>
-    <div class="link"><a href="/transfer">📤 传输中心</a></div>
-    <div class="link"><a href="/chat">💬 聊天室</a></div>
+    <div class="link"><a href="/files/"><span class="title-text">📁 文件浏览</span></a></div>
+    <div class="link"><a href="/transfer"><span class="title-text">📤 传输中心</span></a></div>
+    <div class="link"><a href="/chat"><span class="title-text">💬 聊天室</span></a></div>
+
+    {% if mounted_dirs %}
+    <div class="mounted">已挂载的文件夹</div>
+    <div class="mounted-list">
+        {% for d in mounted_dirs %}
+        <div class="link"><a href="{{ d.url }}"><span class="title-text">📂 {{ d.name }}</span></a></div>
+        {% endfor %}
+    </div>
+    {% endif %}
 
     <div class="footer">
         Powered By {{ app_name }} {{ app_ver }}

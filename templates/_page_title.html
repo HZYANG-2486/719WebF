@@ -1,0 +1,40 @@
+{# 页面标题渲染宏。
+
+   注意必须带 with context，否则宏里读不到调用页面的 nav_titles 变量。
+   用法： {% from "_page_title.html" import page_title, title_css with context %}
+
+   page_title  —— 整个标题区域。配了标题图就用图片取代文字；没配则显示原来的符号/文字。
+   标题区域默认可点击回到首页（首页自身传 link_home=False 不跳转）。
+#}
+{% macro page_title(page, text, emoji='', link_home=True) -%}
+{%- set _banner = (nav_titles or {}).get(page) -%}
+{%- if _banner -%}
+  {%- if link_home %}<a class="title-link" href="/" title="回到首页">{% endif -%}
+  <img class="title-banner" src="{{ _banner }}" alt="{{ text }}" loading="eager" onerror="this.style.display='none';this.nextElementSibling.style.display='inline';"><span class="title-banner-fallback">{{ emoji }} {{ text }}</span>
+  {%- if link_home %}</a>{% endif -%}
+{%- elif link_home -%}
+  <a class="title-link" href="/" title="回到首页"><span class="title-text">{{ emoji }} {{ text }}</span></a>
+{%- else -%}
+  <span class="title-text">{{ emoji }} {{ text }}</span>
+{%- endif -%}
+{%- endmacro %}
+
+
+{# 标题相关样式。各页面 <head> 里 include 一次即可。
+   banner_max_h 是标题图的最大高度（px）：高度跟随原标题区域，宽度按比例自适应，
+   这样换图后不会把标题栏撑变形，也不会在窄屏上溢出去。 #}
+{% macro title_css(banner_max_h=44) -%}
+<style>
+/* 标题图：高度自适应（不超过 banner_max_h），宽度按原图比例，绝不拉伸 */
+.title-banner{display:block;height:auto;max-height:{{ banner_max_h }}px;max-width:min(72vw, 560px);width:auto;object-fit:contain;}
+/* 图片加载失败时露出来的兜底文字，默认隐藏 */
+.title-banner-fallback{display:none;}
+/* 可点击的标题：不改变原有外观，只是加上手型和一点点反馈 */
+.title-link{display:inline-flex;align-items:center;gap:8px;color:inherit;text-decoration:none;cursor:pointer;transition:opacity 0.2s ease,transform 0.2s ease;}
+.title-link:hover{opacity:0.86;}
+.title-link:active{transform:scale(0.985);}
+.title-link:focus-visible{outline:2px solid rgba(255,255,255,0.65);outline-offset:3px;border-radius:6px;}
+.title-text{display:inline-flex;align-items:center;gap:8px;}
+@media (prefers-reduced-motion: reduce){.title-link{transition:none;}}
+</style>
+{%- endmacro %}

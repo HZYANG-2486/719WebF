@@ -18,8 +18,12 @@ pillow>=10.0
 bbcode>=1.1
 
 # 可选：Cloudflare 风格错误页（缺失时自动回退纯文本）
-cloudflare_error_page>=0.1
+# cloudflare_error_page>=0.1
 
 # WebSocket 支持（聊天室实时消息）
 flask-sock>=0.7
 gevent>=24.0
+
+# 管理账号 TOTP 双因素认证
+pyotp>=2.8
+qrcode>=7.0

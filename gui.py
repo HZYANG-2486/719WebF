@@ -8,7 +8,48 @@ import logging
 from typing import Callable, Optional, Dict, Any
 
 from version import APP_NAME, APP_VER
-DEFAULT_CONFIG_FILE = "config.xml"
+
+# 程序所在目录：用于定位 .secret 等固定文件
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 可自定义标题图的页面：标识 -> 页面中文名。
+# 与 app.py 里的 NAV_ICON_PAGES 必须保持一致——gui.py 不导入 app.py
+# （导入会连带拉起 gevent/Flask，设置工具不需要那一整套），故此处独立维护。
+NAV_ICON_PAGES = {
+    "home": "首页",
+    "files": "文件浏览",
+    "transfer": "传输中心",
+    "chat": "聊天室",
+    "health": "状态监控",
+}
+
+
+def _resolve_default_config_file():
+    """把默认 config.xml 路径解析为相对于脚本/可执行文件目录的绝对路径。
+
+    这样不论通过哪一种方式启动（双击 .py、快捷方式、打包成 exe、CD 到其它目录执行）
+    config.xml 都会稳定落在程序目录，不会出现"要手动移植配置"、"右键生成的 xml 在 C:\\Windows\\system32 里"等问题。
+    """
+    # 优先使用 sys.argv[0] / sys.executable 的目录（PyInstaller 打包 & 脚本执行都覆盖）
+    base_dir = None
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        try:
+            script = os.path.abspath(sys.argv[0]) if sys.argv else ""
+            if script and os.path.isdir(os.path.dirname(script)):
+                base_dir = os.path.dirname(script)
+        except Exception:
+            base_dir = None
+    if not base_dir:
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+        except Exception:
+            base_dir = os.getcwd()
+    return os.path.join(base_dir, "config.xml")
+
+
+DEFAULT_CONFIG_FILE = _resolve_default_config_file()
 
 logger = logging.getLogger(APP_NAME)
 
@@ -25,14 +66,37 @@ def _ensure_pystray():
         from PIL import Image as _Image
 
 
-def _has_display():
-    try:
-        import tkinter as tk_test
-        root = tk_test.Tk()
-        root.destroy()
-        return True
-    except Exception:
+def _has_display(timeout_seconds: float = 1.5) -> bool:
+    if os.name == "nt":
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            return bool(user32.GetProcessWindowStation() is not None)
+        except Exception:
+            pass
+    result = {"ok": False}
+    exc = []
+
+    def _probe():
+        try:
+            import tkinter as tk_test
+            root = tk_test.Tk()
+            try:
+                root.withdraw()
+                root.update_idletasks()
+            except Exception:
+                pass
+            root.destroy()
+            result["ok"] = True
+        except Exception as e:
+            exc.append(e)
+
+    t = threading.Thread(target=_probe, daemon=True)
+    t.start()
+    t.join(timeout_seconds)
+    if t.is_alive():
         return False
+    return result["ok"]
 
 
 def get_default_cfg() -> dict:
@@ -107,6 +171,17 @@ def get_default_cfg() -> dict:
             "max_history_samples": 360,
             "sample_interval": 10,
         },
+        "admin": {
+            "enabled": False,
+            "username": "",
+            "password_hash": "",
+            "totp_secret": "",
+        },
+        "virtual_dirs": {},
+        "hidden_folders": set(),
+        "display_names": {},
+        # 标题图：{页面标识: 图片路径}。配了则整块标题只显示图片。默认不启用。
+        "nav_titles": {},
     }
 
 
@@ -121,11 +196,25 @@ def merge_with_defaults(partial_cfg) -> dict:
         if k in partial_cfg:
             result[k] = partial_cfg[k]
     child_nodes = ["chat", "paths", "p2p", "file_transfer",
-                   "waf", "security", "system", "monitor"]
+                   "waf", "security", "system", "monitor", "admin"]
     for node in child_nodes:
         if node in partial_cfg and partial_cfg[node] is not None:
             for k, v in partial_cfg[node].items():
                 result[node][k] = v
+    # 虚拟目录：{显示名: 物理路径} 映射。
+    # 整体替换而非增量合并——否则用户在设置界面删除的条目会因为
+    # 默认值里还留着而"复活"，删除操作看起来无效。
+    if "virtual_dirs" in partial_cfg and partial_cfg["virtual_dirs"] is not None:
+        result["virtual_dirs"] = dict(partial_cfg["virtual_dirs"])
+    # 隐藏文件夹：不列出但可直接访问的名称集合（同样整体替换）
+    if "hidden_folders" in partial_cfg and partial_cfg["hidden_folders"] is not None:
+        result["hidden_folders"] = set(partial_cfg["hidden_folders"])
+    # 显示别名：{真实名称: 列表显示名}
+    if "display_names" in partial_cfg and partial_cfg["display_names"] is not None:
+        result["display_names"] = dict(partial_cfg["display_names"])
+    # 标题图：整体替换，清空后才能回到原来的文字
+    if "nav_titles" in partial_cfg and partial_cfg["nav_titles"] is not None:
+        result["nav_titles"] = dict(partial_cfg["nav_titles"])
     return result
 
 
@@ -357,18 +446,66 @@ def create_default_config(config_path: str) -> None:
     el = ET.SubElement(chat_el, "max_message_length")
     el.text = str(default_cfg["chat"]["max_message_length"])
 
+    admin_el = ET.SubElement(root, "admin")
+    admin_el.append(ET.Comment(
+        "管理账号：用于删除不合适的聊天消息。enabled 控制是否启用（默认 false）。"
+        "password_hash/totp_secret 请用 db_tool.py 生成，切勿手填明文密码。"
+    ))
+    admin_el.set("enabled", "false")
+    admin_el.set("username", "")
+    admin_el.set("password_hash", "")
+    admin_el.set("totp_secret", "")
+
+    vdirs_el = ET.SubElement(root, "virtual_dirs")
+    vdirs_el.append(ET.Comment(
+        "虚拟目录：让某个文件夹以别名出现在列表中（映射到本机物理路径）。"
+        "路径必须位于共享目录内（相对路径会被解析为共享目录下），否则将被忽略。"
+        "示例：<dir name=\"docs\" path=\"sub/docs\" />"
+    ))
+
+    hidden_el = ET.SubElement(root, "hidden_folders")
+    hidden_el.append(ET.Comment(
+        "隐藏文件夹：列表中将不显示这些名称的文件夹（输入完整名称匹配，仍可直接访问）。"
+        "示例：<folder name=\"secret\" />"
+    ))
+
+    names_el = ET.SubElement(root, "display_names")
+    names_el.append(ET.Comment(
+        "显示别名：列表中把某条目显示成另一个名字，不改动磁盘上的真实名称。"
+        "示例：<item name=\"real_folder\" as=\"对外显示的名字\" />"
+    ))
+
+    # 标题图节点：出厂时全部留空，表示各页面继续显示原来的文字与符号
+    titles_el = ET.SubElement(root, "nav_titles")
+    titles_el.append(ET.Comment(
+        "标题图：把整块标题文字换成一幅图片。name 可选 "
+        + "/".join(NAV_ICON_PAGES.keys())
+        + "；image 填本地图片的绝对路径，留空则不启用（显示原来的文字与符号）。"
+    ))
+    for _page in NAV_ICON_PAGES:
+        _img = (default_cfg.get("nav_titles") or {}).get(_page, "")
+        ET.SubElement(titles_el, "page", {"name": _page, "image": str(_img)})
+
     tree = ET.ElementTree(root)
+    parent = os.path.dirname(os.path.abspath(config_path))
+    if parent and not os.path.isdir(parent):
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except Exception as e:
+            raise IOError(f"创建配置目录失败: {parent} ({e})") from e
     tmp_file = config_path + ".tmp"
     try:
         with open(tmp_file, "wb") as f:
             tree.write(f, encoding="utf-8", xml_declaration=True)
         os.replace(tmp_file, config_path)
-    except Exception:
+    except Exception as e:
         if os.path.exists(tmp_file):
             try:
                 os.remove(tmp_file)
             except Exception:
                 pass
+        logging.error(f"生成默认配置文件失败: {config_path}, 错误: {e}")
+        raise IOError(f"生成默认配置文件 {config_path} 失败: {e}") from e
 
 
 def _parse_set(text):
@@ -379,6 +516,11 @@ def _parse_set(text):
 
 def load_config(config_path: str, _depth: int = 0) -> Dict[str, Any]:
     if not os.path.exists(config_path):
+        try:
+            create_default_config(config_path)
+            logging.info(f"配置文件不存在，已生成默认配置: {config_path}")
+        except Exception as e:
+            logging.warning(f"生成默认配置失败: {e}")
         return merge_with_defaults({})
 
     try:
@@ -489,7 +631,102 @@ def load_config(config_path: str, _depth: int = 0) -> Dict[str, Any]:
             "sample_interval": int(mon_node.findtext("sample_interval", "10")),
         }
 
+    admin_node = root.find("admin")
+    if admin_node is not None:
+        partial_cfg["admin"] = {
+            "enabled": (admin_node.get("enabled", "false").lower() == "true"),
+            "username": admin_node.get("username", ""),
+            "password_hash": admin_node.get("password_hash", ""),
+            "totp_secret": admin_node.get("totp_secret", ""),
+        }
+
+    vdirs_node = root.find("virtual_dirs")
+    if vdirs_node is not None:
+        vdirs = {}
+        for d in vdirs_node.findall("dir"):
+            name = (d.get("name") or "").strip()
+            path = (d.get("path") or "").strip()
+            if name and path:
+                vdirs[name] = path
+        partial_cfg["virtual_dirs"] = vdirs
+
+    hidden_node = root.find("hidden_folders")
+    if hidden_node is not None:
+        partial_cfg["hidden_folders"] = set(
+            (f.get("name") or "").strip()
+            for f in hidden_node.findall("folder")
+            if (f.get("name") or "").strip()
+        )
+
+    # 显示别名：把某个条目在列表中显示成另一个名字（不改动磁盘真实名称）
+    names_node = root.find("display_names")
+    if names_node is not None:
+        display_names = {}
+        for node in names_node.findall("item"):
+            real = (node.get("name") or "").strip()
+            shown = (node.get("as") or "").strip()
+            if real and shown:
+                display_names[real] = shown
+        partial_cfg["display_names"] = display_names
+
+    # 标题图：<page name="chat" image="/path/banner.png" />
+    titles_node = root.find("nav_titles")
+    if titles_node is not None:
+        nav_titles = {}
+        for node in titles_node.findall("page"):
+            key = (node.get("name") or "").strip()
+            image = (node.get("image") or "").strip()
+            if key in NAV_ICON_PAGES:
+                nav_titles[key] = image
+        partial_cfg["nav_titles"] = nav_titles
+
     return merge_with_defaults(partial_cfg)
+
+
+def name_is_illegal(name: str):
+    """检查一个"显示名称"是否可用。
+
+    显示名称会直接出现在网页的文件夹列表里，所以不能包含路径分隔符
+    （会让层级看起来错乱），也不能是 "." / ".." 这类相对路径符号。
+    返回 (是否有问题, 原因说明)，没问题时返回 (False, "")。
+    """
+    if name is None:
+        return True, "名称不能为空。"
+    s = str(name).strip()
+    if not s:
+        return True, "名称不能为空。"
+    if "/" in s or "\\" in s:
+        return True, "名称里不能包含斜杠（/ 或 \\），否则列表层级会显示错乱。"
+    if s in (".", ".."):
+        return True, "名称不能是「.」或「..」。"
+    if len(s) > 60:
+        return True, "名称太长了，请控制在 60 个字符以内。"
+    return False, ""
+
+
+def check_vdir_conflicts(virtual_dirs, share_dir):
+    """检查虚拟目录别名是否与共享目录里的真实文件夹重名。
+
+    重名的后果很隐蔽：网页列表里显示的是真实文件夹，点进去打开的却是
+    虚拟目录指向的另一个位置——"看到 A 打开 B"。所以保存时直接拦下来。
+
+    返回问题描述列表，空列表表示没有问题。
+    """
+    problems = []
+    if not virtual_dirs:
+        return problems
+    try:
+        real_items = set()
+        if share_dir and os.path.isdir(share_dir):
+            real_items = set(os.listdir(share_dir))
+    except Exception:
+        real_items = set()
+    for alias in virtual_dirs.keys():
+        if alias in real_items:
+            problems.append(
+                f"虚拟目录别名「{alias}」与共享目录里的同名文件夹冲突，"
+                "会导致列表里显示一个、点开却是另一个。请给虚拟目录换个别名。")
+    return problems
 
 
 def save_config(config_path: str, cfg) -> None:
@@ -579,24 +816,80 @@ def save_config(config_path: str, cfg) -> None:
     _write_field(chat_el, "http_timeout", cfg["chat"]["http_timeout"], "聊天接口 HTTP 请求超时时间（单位：秒），用于长轮询等场景，建议 10-120，默认 30")
     _write_field(chat_el, "max_message_length", cfg["chat"]["max_message_length"], "单条聊天消息最大字符长度，超过长度的消息将被拒绝，默认 2000")
 
+    admin_el = ET.SubElement(root, "admin")
+    admin_el.append(ET.Comment(
+        "管理账号：用于删除不合适的聊天消息。enabled 控制是否启用（默认 false）。"
+        "password_hash/totp_secret 请用 db_tool.py 生成，切勿手填明文密码。"
+    ))
+    admin_el.set("enabled", "true" if cfg["admin"].get("enabled") else "false")
+    admin_el.set("username", str(cfg["admin"].get("username", "")))
+    admin_el.set("password_hash", str(cfg["admin"].get("password_hash", "")))
+    admin_el.set("totp_secret", str(cfg["admin"].get("totp_secret", "")))
+
+    vdirs_el = ET.SubElement(root, "virtual_dirs")
+    vdirs_el.append(ET.Comment(
+        "虚拟目录：让某个文件夹以别名出现在列表中（映射到本机物理路径）。"
+        "路径必须位于共享目录内（相对路径会被解析为共享目录下），否则将被忽略。"
+        "示例：<dir name=\"docs\" path=\"sub/docs\" />"
+    ))
+    for _name, _path in sorted((cfg.get("virtual_dirs") or {}).items()):
+        ET.SubElement(vdirs_el, "dir", {"name": str(_name), "path": str(_path)})
+
+    hidden_el = ET.SubElement(root, "hidden_folders")
+    hidden_el.append(ET.Comment(
+        "隐藏文件夹：列表中将不显示这些名称的文件夹（输入完整名称匹配，仍可直接访问）。"
+        "示例：<folder name=\"secret\" />"
+    ))
+    for _name in sorted(cfg.get("hidden_folders") or set()):
+        ET.SubElement(hidden_el, "folder", {"name": str(_name)})
+
+    names_el = ET.SubElement(root, "display_names")
+    names_el.append(ET.Comment(
+        "显示别名：列表中把某条目显示成另一个名字，不改动磁盘上的真实名称。"
+        "示例：<item name=\"real_folder\" as=\"对外显示的名字\" />"
+    ))
+    for _real, _shown in sorted((cfg.get("display_names") or {}).items()):
+        ET.SubElement(names_el, "item", {"name": str(_real), "as": str(_shown)})
+
+    # 标题图节点：留空表示该页面继续显示原来的文字与符号
+    titles_el = ET.SubElement(root, "nav_titles")
+    titles_el.append(ET.Comment(
+        "标题图：把整块标题文字换成一幅图片。name 可选 "
+        + "/".join(NAV_ICON_PAGES.keys())
+        + "；image 填本地图片的绝对路径，留空则不启用（显示原来的文字与符号）。"
+    ))
+    for _page in NAV_ICON_PAGES:
+        _img = (cfg.get("nav_titles") or {}).get(_page, "")
+        ET.SubElement(titles_el, "page", {"name": _page, "image": str(_img)})
+
     tree = ET.ElementTree(root)
+    parent = os.path.dirname(os.path.abspath(config_path))
+    if parent and not os.path.isdir(parent):
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except Exception as e:
+            raise IOError(f"创建配置目录失败: {parent} ({e})") from e
     tmp_path = config_path + ".tmp"
     try:
         with open(tmp_path, "wb") as f:
             tree.write(f, encoding="utf-8", xml_declaration=True)
         os.replace(tmp_path, config_path)
-    except Exception:
+    except Exception as e:
         if os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
             except Exception:
                 pass
+        logging.error(f"写入配置文件失败: {config_path}, 错误: {e}")
+        raise IOError(f"写入配置文件 {config_path} 失败: {e}") from e
 
 
 class SettingsGUI:
-    def __init__(self, config_path: str, on_save_callback: Optional[Callable[[Dict[str, Any]], None]] = None):
+    def __init__(self, config_path: str, on_save_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+                 on_restart_callback: Optional[Callable[[], None]] = None):
         self.config_path = config_path
         self.on_save_callback = on_save_callback
+        self.on_restart_callback = on_restart_callback
         self.cfg = load_config(config_path)
         self._root = None
         self._created = False
@@ -604,6 +897,10 @@ class SettingsGUI:
         self._tab_ids = {}
         self.advanced_mode = None
         self.notebook = None
+        # 目录与命名：以内存副本编辑，保存时统一写回，避免误改导致配置丢失
+        self.virtual_dirs = dict(self.cfg.get("virtual_dirs") or {})
+        self.hidden_folders = set(self.cfg.get("hidden_folders") or set())
+        self.display_names = dict(self.cfg.get("display_names") or {})
 
     def create_window(self):
         try:
@@ -641,7 +938,7 @@ class SettingsGUI:
 
         desc_label = ttk.Label(
             top_frame,
-            text="修改配置后需重启服务生效。基础 Tab 为常用设置，高级 Tab 含 WAF/安全/系统/监控等详细配置。",
+            text="基础 Tab 为常用设置，高级 Tab 含 WAF/安全/系统/监控等详细配置。保存后可直接选择立即重启生效，也可随时通过托盘菜单「重启服务」手动重启。",
             font=("微软雅黑", 9),
             foreground="#555555",
         )
@@ -657,57 +954,696 @@ class SettingsGUI:
         self.advanced_check.pack(anchor="w")
 
         self.notebook = ttk.Notebook(self._root)
-        self.notebook.pack(fill="both", expand=True, padx=15, pady=(5, 10))
 
-        tab1 = ttk.Frame(self.notebook, padding=15)
-        tab2 = ttk.Frame(self.notebook, padding=15)
-        tab3 = ttk.Frame(self.notebook, padding=15)
-        tab4 = ttk.Frame(self.notebook, padding=15)
-        tab5 = ttk.Frame(self.notebook, padding=15)
-        tab6 = ttk.Frame(self.notebook, padding=15)
-        tab7 = ttk.Frame(self.notebook, padding=15)
-        tab8 = ttk.Frame(self.notebook, padding=15)
-        tab9 = ttk.Frame(self.notebook, padding=15)
-
-        self.notebook.add(tab1, text="基础")
-        self.notebook.add(tab2, text="聊天")
-        self.notebook.add(tab3, text="路径")
-        self.notebook.add(tab4, text="P2P")
-        self.notebook.add(tab5, text="文件传输")
-        self.notebook.add(tab6, text="WAF防护")
-        self.notebook.add(tab7, text="安全设置")
-        self.notebook.add(tab8, text="系统设置")
-        self.notebook.add(tab9, text="监控设置")
-
-        self._tab_ids = {
-            "基础": tab1,
-            "聊天": tab2,
-            "路径": tab3,
-            "P2P": tab4,
-            "文件传输": tab5,
-            "WAF防护": tab6,
-            "安全设置": tab7,
-            "系统设置": tab8,
-            "监控设置": tab9,
-        }
-
-        self._build_tab1_basic(tab1)
-        self._build_tab2_chat(tab2)
-        self._build_tab3_paths(tab3)
-        self._build_tab4_p2p(tab4)
-        self._build_tab5_file_transfer(tab5)
-        self._build_tab6_waf(tab6)
-        self._build_tab7_security(tab7)
-        self._build_tab8_system(tab8)
-        self._build_tab9_monitor(tab9)
-
-        btn_frame = ttk.Frame(self._root, padding=(15, 0, 15, 15))
+        # 按钮栏用 side="bottom" 固定在窗口底部，并先于 notebook 布局。
+        # pack 的排布顺序决定分配空间的优先级：先 bottom 后 expand，
+        # 才能保证窗口变矮时按钮不会被内容挤掉。
+        btn_frame = ttk.Frame(self._root, padding=(15, 10, 15, 12))
         btn_frame.pack(fill="x", side="bottom")
         ttk.Button(btn_frame, text="取消", command=self._destroy).pack(side="right", padx=(8, 0))
         ttk.Button(btn_frame, text="保存", command=self._on_save).pack(side="right")
+        # 关于入口放左下角，与右侧的保存/取消分开，避免误点
+        ttk.Button(btn_frame, text="关于", command=self._show_about).pack(side="left")
+
+        # notebook 在按钮栏之后 pack，剩余的垂直空间都归它
+        self.notebook.pack(fill="both", expand=True, padx=15, pady=(5, 5))
+
+        # 每个标签页都套一层带滚动条的容器：配置项较多时不会撑高窗口，
+        # 也避免了"确定/取消被压缩到看不见"的问题。
+        tabs = {}
+        for name in ("基础", "聊天", "路径", "P2P", "文件传输", "WAF防护",
+                     "安全设置", "系统设置", "监控设置", "目录与命名", "标题设置", "管理账号"):
+            tabs[name] = self._make_scroll_tab(self.notebook, name)
+
+        # _tab_ids 存 notebook 真正注册的那一层（outer），
+        # 否则隐藏/切换标签页会作用在错误的控件上而完全失效。
+        self._tab_ids = {name: outer for name, (outer, _inner) in tabs.items()}
+
+        self._build_tab1_basic(tabs["基础"][1])
+        self._build_tab2_chat(tabs["聊天"][1])
+        self._build_tab3_paths(tabs["路径"][1])
+        self._build_tab4_p2p(tabs["P2P"][1])
+        self._build_tab5_file_transfer(tabs["文件传输"][1])
+        self._build_tab6_waf(tabs["WAF防护"][1])
+        self._build_tab7_security(tabs["安全设置"][1])
+        self._build_tab8_system(tabs["系统设置"][1])
+        self._build_tab9_monitor(tabs["监控设置"][1])
+        self._build_tab10_paths_naming(tabs["目录与命名"][1])
+        self._build_tab12_nav_titles(tabs["标题设置"][1])
+        self._build_tab11_admin(tabs["管理账号"][1])
 
         self.reload_config()
         self._on_toggle_advanced()
+
+        self._root.update_idletasks()
+        self._root.lift()
+        try:
+            self._root.attributes("-topmost", True)
+            self._root.after(120, lambda: self._root.attributes("-topmost", False))
+        except Exception:
+            pass
+        try:
+            self._root.focus_force()
+        except Exception:
+            pass
+        try:
+            if os.name == "nt":
+                import ctypes
+                try:
+                    hwnd = ctypes.windll.user32.GetParent(self._root.winfo_id())
+                    if hwnd:
+                        SW_RESTORE = 9
+                        ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
+                        ctypes.windll.user32.SetForegroundWindow(hwnd)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        self._root.after(80, self._focus_first_entry)
+
+    def _make_scroll_tab(self, notebook, title):
+        """创建一个可滚动的标签页。
+
+        返回 (outer, inner)：
+        - outer 是注册到 notebook 的那一层，用于隐藏/切换标签页；
+        - inner 是真正摆放配置控件的容器，随内容自动增高并可滚动。
+
+        配置项较多时窗口不会被迫撑高，用户可用滚轮/滚动条查看，
+        底部的"保存/取消"按钮也始终完整可见。
+        """
+        import tkinter as tk
+        ttk = __import__("tkinter.ttk", fromlist=["ttk"])
+
+        outer = ttk.Frame(notebook)
+        notebook.add(outer, text=title)
+
+        canvas = tk.Canvas(outer, borderwidth=0, highlightthickness=0)
+        vbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas, padding=15)
+
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner_configure(_event=None):
+            try:
+                canvas.configure(scrollregion=canvas.bbox("all"))
+            except Exception:
+                pass
+
+        def _on_canvas_configure(event):
+            try:
+                canvas.itemconfigure(window_id, width=event.width)
+            except Exception:
+                pass
+
+        inner.bind("<Configure>", _on_inner_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+        canvas.configure(yscrollcommand=vbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        vbar.pack(side="right", fill="y")
+
+        # 鼠标滚轮支持（Windows / macOS / Linux 事件号不同）
+        def _on_wheel(event):
+            try:
+                if getattr(event, "num", None) == 4:
+                    delta = -1
+                elif getattr(event, "num", None) == 5:
+                    delta = 1
+                else:
+                    delta = -1 if event.delta > 0 else 1
+                canvas.yview_scroll(delta, "units")
+            except Exception:
+                pass
+
+        # 只在该标签页可见时接管滚轮，避免影响其它页面的滚动
+        def _bind_wheel(_e=None):
+            try:
+                canvas.bind_all("<MouseWheel>", _on_wheel)
+                canvas.bind_all("<Button-4>", _on_wheel)
+                canvas.bind_all("<Button-5>", _on_wheel)
+            except Exception:
+                pass
+
+        def _unbind_wheel(_e=None):
+            try:
+                canvas.unbind_all("<MouseWheel>")
+                canvas.unbind_all("<Button-4>")
+                canvas.unbind_all("<Button-5>")
+            except Exception:
+                pass
+
+        canvas.bind("<Enter>", _bind_wheel)
+        canvas.bind("<Leave>", _unbind_wheel)
+
+        return outer, inner
+
+    def _build_tab10_paths_naming(self, parent):
+        """目录与命名：虚拟目录、隐藏项、显示别名（重命名）。"""
+        import tkinter as tk
+        ttk = __import__("tkinter.ttk", fromlist=["ttk"])
+
+        warn = ttk.Label(
+            parent,
+            text="在这里管理文件列表的显示方式。所有改动都只影响列表展示，不会真的移动或改名磁盘上的文件。",
+            font=("微软雅黑", 9), foreground="#555555", wraplength=620, justify="left")
+        warn.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 12))
+
+        # ---------- 虚拟目录 ----------
+        ttk.Label(parent, text="虚拟目录", font=("微软雅黑", 10, "bold")).grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(4, 2))
+        ttk.Label(
+            parent,
+            text="让某个文件夹以别名出现在列表中，点击后指向你指定的物理路径。\n"
+                 "路径可以位于共享目录之外（例如 D:\\资料、/mnt/data），方便把别处的\n"
+                 "文件夹挂进来。访客始终只能在该目录内浏览，无法跳出到上层或其它位置。\n"
+                 "相对路径按共享目录解析，也可直接填写绝对路径。",
+            font=("微软雅黑", 8), foreground="#777777", justify="left").grid(
+            row=2, column=0, columnspan=3, sticky="w")
+
+        vdir_box = ttk.Frame(parent)
+        vdir_box.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 4))
+        vdir_box.columnconfigure(0, weight=1)
+
+        self._vdir_list = tk.Listbox(vdir_box, height=4, font=("微软雅黑", 9))
+        self._vdir_list.grid(row=0, column=0, sticky="ew")
+        vbar1 = ttk.Scrollbar(vdir_box, orient="vertical", command=self._vdir_list.yview)
+        self._vdir_list.configure(yscrollcommand=vbar1.set)
+        vbar1.grid(row=0, column=1, sticky="ns")
+
+        vdir_btns = ttk.Frame(vdir_box)
+        vdir_btns.grid(row=0, column=2, sticky="ns", padx=(8, 0))
+        ttk.Button(vdir_btns, text="添加", width=10,
+                   command=self._add_virtual_dir).pack(pady=(0, 4))
+        ttk.Button(vdir_btns, text="删除", width=10,
+                   command=self._remove_virtual_dir).pack()
+
+        # ---------- 隐藏项目 ----------
+        ttk.Label(parent, text="隐藏项目", font=("微软雅黑", 10, "bold")).grid(
+            row=4, column=0, columnspan=3, sticky="w", pady=(14, 2))
+        ttk.Label(
+            parent,
+            text="列表中将不显示这些名称的条目。文件仍然存在，知道网址时依然可以访问。",
+            font=("微软雅黑", 8), foreground="#777777", justify="left").grid(
+            row=5, column=0, columnspan=3, sticky="w")
+
+        hidden_box = ttk.Frame(parent)
+        hidden_box.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(6, 4))
+        hidden_box.columnconfigure(0, weight=1)
+
+        self._hidden_list = tk.Listbox(hidden_box, height=4, font=("微软雅黑", 9))
+        self._hidden_list.grid(row=0, column=0, sticky="ew")
+        vbar2 = ttk.Scrollbar(hidden_box, orient="vertical", command=self._hidden_list.yview)
+        self._hidden_list.configure(yscrollcommand=vbar2.set)
+        vbar2.grid(row=0, column=1, sticky="ns")
+
+        hidden_btns = ttk.Frame(hidden_box)
+        hidden_btns.grid(row=0, column=2, sticky="ns", padx=(8, 0))
+        ttk.Button(hidden_btns, text="添加", width=10,
+                   command=self._add_hidden).pack(pady=(0, 4))
+        ttk.Button(hidden_btns, text="删除", width=10,
+                   command=self._remove_hidden).pack()
+
+        # ---------- 显示别名（重命名） ----------
+        ttk.Label(parent, text="显示别名（重命名）", font=("微软雅黑", 10, "bold")).grid(
+            row=7, column=0, columnspan=3, sticky="w", pady=(14, 2))
+        ttk.Label(
+            parent,
+            text="把某个条目的显示名称换成另一个名字（不改动磁盘上的真实文件名）。",
+            font=("微软雅黑", 8), foreground="#777777", justify="left").grid(
+            row=8, column=0, columnspan=3, sticky="w")
+
+        alias_box = ttk.Frame(parent)
+        alias_box.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(6, 4))
+        alias_box.columnconfigure(0, weight=1)
+
+        self._alias_list = tk.Listbox(alias_box, height=4, font=("微软雅黑", 9))
+        self._alias_list.grid(row=0, column=0, sticky="ew")
+        vbar3 = ttk.Scrollbar(alias_box, orient="vertical", command=self._alias_list.yview)
+        self._alias_list.configure(yscrollcommand=vbar3.set)
+        vbar3.grid(row=0, column=1, sticky="ns")
+
+        alias_btns = ttk.Frame(alias_box)
+        alias_btns.grid(row=0, column=2, sticky="ns", padx=(8, 0))
+        ttk.Button(alias_btns, text="添加", width=10,
+                   command=self._add_alias).pack(pady=(0, 4))
+        ttk.Button(alias_btns, text="删除", width=10,
+                   command=self._remove_alias).pack()
+
+    # ---------- 列表编辑器辅助 ----------
+    def _refresh_listbox(self, listbox, items):
+        listbox.delete(0, "end")
+        for text in items:
+            listbox.insert("end", text)
+
+    def _parse_vdir_entry(self, text):
+        """解析 "别名=路径" 输入，返回 (name, path) 或 (None, None)。"""
+        if "=" not in text:
+            return None, None
+        name, path = text.split("=", 1)
+        name, path = name.strip(), path.strip()
+        if not name or not path:
+            return None, None
+        if "/" in name or "\\" in name or name in (".", ".."):
+            return None, None
+        return name, path
+
+    def _add_virtual_dir(self):
+        from tkinter import simpledialog, messagebox
+        text = simpledialog.askstring(
+            "添加虚拟目录",
+            "格式：别名=路径\n\n"
+            "别名：显示在列表中的名称（不能含 / 或 \\）\n"
+            "路径：可填共享目录之外的绝对路径，也可填相对共享目录的路径\n\n"
+            "示例：\n"
+            "  文档库=public_docs\n"
+            "  资料库=D:\\资料",
+            parent=self._root)
+        if not text:
+            return
+        name, path = self._parse_vdir_entry(text)
+        if not name:
+            messagebox.showwarning("格式有误", "请按「别名=路径」填写，且别名不能包含 / 或 \\。")
+            return
+
+        # 提示路径是否存在：不阻断保存，只让用户确认自己填对了
+        share_dir = (self.vars["share_dir"].get() or ".").strip() or "."
+        raw = path
+        if not os.path.isabs(raw):
+            raw = os.path.join(os.path.abspath(share_dir), raw)
+        target = os.path.abspath(raw)
+        if os.path.abspath(share_dir) == target:
+            messagebox.showwarning("不能这样填", "虚拟目录不能指向共享目录本身，否则列表会重复。")
+            return
+        if not os.path.isdir(target):
+            if not messagebox.askyesno(
+                "目录还不存在",
+                f"这个路径当前不是一个存在的文件夹：\n{target}\n\n"
+                "仍然添加吗？（可以稍后建好文件夹，或点「取消」重新填写）"
+            ):
+                return
+
+        self.virtual_dirs[name] = path
+        self._refresh_listbox(self._vdir_list,
+                              [f"{k}  →  {v}" for k, v in sorted(self.virtual_dirs.items())])
+
+    def _remove_virtual_dir(self):
+        sel = self._vdir_list.curselection()
+        if not sel:
+            return
+        keys = sorted(self.virtual_dirs.keys())
+        if sel[0] < len(keys):
+            self.virtual_dirs.pop(keys[sel[0]], None)
+        self._refresh_listbox(self._vdir_list,
+                              [f"{k}  →  {v}" for k, v in sorted(self.virtual_dirs.items())])
+
+    def _add_hidden(self):
+        from tkinter import simpledialog, messagebox
+        text = simpledialog.askstring(
+            "添加隐藏项目",
+            "输入要隐藏的名称（完整名称，区分大小写）\n\n示例：  secret",
+            parent=self._root)
+        if not text:
+            return
+        name = text.strip()
+        if not name:
+            return
+        if "/" in name or "\\" in name:
+            messagebox.showwarning("格式有误", "名称不能包含 / 或 \\。")
+            return
+        self.hidden_folders.add(name)
+        self._refresh_listbox(self._hidden_list, sorted(self.hidden_folders))
+
+    def _remove_hidden(self):
+        sel = self._hidden_list.curselection()
+        if not sel:
+            return
+        names = sorted(self.hidden_folders)
+        if sel[0] < len(names):
+            self.hidden_folders.discard(names[sel[0]])
+        self._refresh_listbox(self._hidden_list, sorted(self.hidden_folders))
+
+    def _add_alias(self):
+        from tkinter import simpledialog, messagebox
+        text = simpledialog.askstring(
+            "添加显示别名",
+            "格式：真实名称=显示名称\n\n"
+            "真实名称：磁盘上实际的文件夹/文件名\n"
+            "显示名称：列表中希望展示的名字\n\n"
+            "示例：  public_docs=公开文档",
+            parent=self._root)
+        if not text or "=" not in text:
+            if text:
+                messagebox.showwarning("格式有误", "请按「真实名称=显示名称」填写。")
+            return
+        real, shown = text.split("=", 1)
+        real, shown = real.strip(), shown.strip()
+        if not real or not shown:
+            messagebox.showwarning("格式有误", "两边都不能为空。")
+            return
+        # 显示名会被直接渲染在网页列表里，带上斜杠会让层级看起来错乱，
+        # 所以这里禁掉路径分隔符和相对路径符号。
+        bad, why = name_is_illegal(shown)
+        if bad:
+            messagebox.showwarning("显示名称不可用", why)
+            return
+        # 两个不同的真实项用同一个显示名，在列表里会完全无法区分，提前拦下
+        dup = [k for k, v in self.display_names.items() if v == shown and k != real]
+        if dup:
+            messagebox.showwarning(
+                "显示名称重复",
+                f"显示名称「{shown}」已经被「{dup[0]}」使用了。\n"
+                "请换一个名字，否则列表里会出现两个一模一样的条目。")
+            return
+        self.display_names[real] = shown
+        self._refresh_listbox(self._alias_list,
+                              [f"{k}  →  {v}" for k, v in sorted(self.display_names.items())])
+
+    def _remove_alias(self):
+        sel = self._alias_list.curselection()
+        if not sel:
+            return
+        keys = sorted(self.display_names.keys())
+        if sel[0] < len(keys):
+            self.display_names.pop(keys[sel[0]], None)
+        self._refresh_listbox(self._alias_list,
+                              [f"{k}  →  {v}" for k, v in sorted(self.display_names.items())])
+
+    def _build_tab12_nav_titles(self, parent):
+        """标题设置：把各页面标题栏整块文字换成一张图片。"""
+        import tkinter as tk
+        ttk = __import__("tkinter.ttk", fromlist=["ttk"])
+
+        ttk.Label(
+            parent,
+            text="「标题图」把整块标题文字换成一张图片（配了就只显示图片）。",
+            font=("微软雅黑", 9), foreground="#555555", wraplength=620, justify="left"
+        ).grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 2))
+
+        ttk.Label(
+            parent,
+            text="不配标题图的页面保持原样：首页显示网站标题文字，其它页面显示符号+文字。\n"
+                 "点击网址顶部的标题区域都会回到首页（首页自身除外）。\n"
+                 "建议使用宽扁比例的 PNG/JPG（如 480×96），高度会自动适配原标题区域。\n"
+                 "改动需保存并重启服务后在网页上生效。",
+            font=("微软雅黑", 8), foreground="#777777", justify="left"
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(0, 10))
+
+        # 每个页面的配置值都放一份在这里，保存时统一收集
+        self.nav_title_vars = {}
+        self.nav_title_labels = {}  # 页面标识 -> 标题图预览 Label
+        self._nav_title_photos = {}
+
+        row = 2
+        for page, page_name in NAV_ICON_PAGES.items():
+            title_var = tk.StringVar()
+            self.nav_title_vars[page] = title_var
+
+            box = ttk.LabelFrame(parent, text=f" {page_name} ", padding=(10, 6, 10, 8))
+            box.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(0, 8))
+            box.columnconfigure(3, weight=0)
+
+            ttk.Label(box, text="标题图", font=("微软雅黑", 9), width=7).grid(
+                row=0, column=0, sticky="w", pady=3)
+
+            title_preview = tk.Label(box, height=48, relief="solid", borderwidth=1,
+                                     background="#ffffff")
+            title_preview.grid(row=0, column=1, sticky="w", padx=(0, 10), pady=3)
+            self.nav_title_labels[page] = title_preview
+
+            title_hint = ttk.Label(box, text="未启用（保持原文字）",
+                                   font=("微软雅黑", 8), foreground="#999999", width=20)
+            title_hint.grid(row=0, column=2, sticky="w", padx=(0, 8), pady=3)
+            setattr(self, f"_nav_title_hint_{page}", title_hint)
+
+            title_btns = ttk.Frame(box)
+            title_btns.grid(row=0, column=3, sticky="w", pady=3)
+            ttk.Button(title_btns, text="选图片", width=9,
+                       command=lambda p=page: self._pick_nav_title(p)).pack(side="left", padx=(0, 4))
+            ttk.Button(title_btns, text="清除", width=7,
+                       command=lambda p=page: self._clear_nav_title(p)).pack(side="left")
+
+            row += 1
+
+        btns_bottom = ttk.Frame(parent)
+        btns_bottom.grid(row=row, column=0, columnspan=4, sticky="w", pady=(6, 4))
+        ttk.Button(btns_bottom, text="全部恢复默认",
+                   command=self._reset_all_nav_titles).pack(side="left")
+        ttk.Label(btns_bottom, text="（所有页面标题图全部关闭，回到原文字）",
+                  font=("微软雅黑", 8), foreground="#777777").pack(side="left", padx=(8, 0))
+
+    # ---------------- 标题图 ----------------
+
+    def _load_nav_title_preview(self, page, value):
+        """把标题图画到预览位上。标题图通常很宽，这里等比缩到预览框内。"""
+        import tkinter as tk
+        label = self.nav_title_labels.get(page)
+        hint = getattr(self, f"_nav_title_hint_{page}", None)
+        if label is None:
+            return
+        value = (value or "").strip()
+        photo = None
+        if value and os.path.isfile(value):
+            try:
+                img = tk.PhotoImage(file=value)
+                # 预览框宽度有限，按比例缩小：取宽高比例中更"缩得多"的那一边
+                max_w, max_h = 150, 46
+                factor = 1
+                while (img.width() // factor > max_w) or (img.height() // factor > max_h):
+                    factor += 1
+                    if factor > 64:
+                        break
+                if factor > 1:
+                    img = img.subsample(factor)
+                photo = img
+            except Exception:
+                photo = None
+        self._nav_title_photos[page] = photo
+        try:
+            if photo:
+                label.configure(image=photo, text="", width=0)
+            else:
+                label.configure(image="", text="（无）" if value else "", width=18)
+        except Exception:
+            pass
+        if hint is not None:
+            try:
+                if value:
+                    name = os.path.basename(value)
+                    hint.configure(text=name if len(name) <= 18 else name[:15] + "...",
+                                   foreground="#2f7d32")
+                else:
+                    hint.configure(text="未启用（保持原文字）", foreground="#999999")
+            except Exception:
+                pass
+
+    def _pick_nav_title(self, page):
+        from tkinter import filedialog, messagebox
+        path = filedialog.askopenfilename(
+            title=f"为「{NAV_ICON_PAGES[page]}」选择标题图",
+            filetypes=[("图片文件", "*.png *.jpg *.jpeg *.gif *.webp *.bmp"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+            messagebox.showwarning("格式不支持", "标题图请使用 PNG / JPG / GIF / WEBP / BMP 格式。")
+            return
+        try:
+            if os.path.getsize(path) > 2 * 1024 * 1024:
+                messagebox.showwarning("图片过大", "标题图请使用 2MB 以内的图片。")
+                return
+        except OSError as e:
+            messagebox.showwarning("无法读取", f"读取图片失败：{e}")
+            return
+        self.nav_title_vars[page].set(path)
+        self._load_nav_title_preview(page, path)
+
+    def _clear_nav_title(self, page):
+        self.nav_title_vars[page].set("")
+        self._load_nav_title_preview(page, "")
+
+    def _reset_all_nav_titles(self):
+        """一键恢复：所有页面标题图关闭，回到原来的文字。"""
+        for page in NAV_ICON_PAGES:
+            self.nav_title_vars[page].set("")
+            self._load_nav_title_preview(page, "")
+
+    def _refresh_nav_title_widgets(self):
+        """按当前配置刷新标题图预览（加载配置时调用）。"""
+        titles = dict(self.cfg.get("nav_titles") or {})
+        for page in NAV_ICON_PAGES:
+            tval = titles.get(page, "")
+            self.nav_title_vars[page].set(tval)
+            self._load_nav_title_preview(page, tval)
+
+    def _build_tab11_admin(self, parent):
+        """管理账号：启用开关、账号密码、动态验证码生成，保存时直接写入配置文件。"""
+        import tkinter as tk
+        ttk = __import__("tkinter.ttk", fromlist=["ttk"])
+
+        info = ttk.Label(
+            parent,
+            text="管理账号用于删除聊天室中的问题消息。密码与动态验证码可以「二选一」或「两个都要」，\n"
+                 "未填写的验证方式不会参与登录校验。在这里设置后会直接写入配置文件，无需手工编辑。",
+            font=("微软雅黑", 9), foreground="#555555", wraplength=620, justify="left")
+        info.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 12))
+
+        self.vars["admin_enabled"] = tk.BooleanVar()
+        self._grid_field(parent, 1, "启用管理功能",
+                         ttk.Checkbutton(parent, variable=self.vars["admin_enabled"],
+                                         text="勾选后聊天室页面会出现管理员登录入口",
+                                         command=self._refresh_admin_status_text),
+                         "关闭时聊天室不会显示任何管理入口")
+
+        self.vars["admin_username"] = tk.StringVar()
+        username_entry = ttk.Entry(parent, textvariable=self.vars["admin_username"], width=32)
+        username_entry.bind("<KeyRelease>", lambda _e: self._refresh_admin_status_text())
+        self._grid_field(parent, 2, "管理员用户名", username_entry,
+                         "登录时填写的用户名")
+
+        # ---- 密码 ----
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=3, column=0, columnspan=3, sticky="ew", pady=10)
+        ttk.Label(parent, text="密码验证方式", font=("微软雅黑", 10, "bold")).grid(
+            row=4, column=0, columnspan=3, sticky="w")
+
+        self.vars["admin_use_password"] = tk.BooleanVar()
+        ttk.Checkbutton(parent, variable=self.vars["admin_use_password"],
+                        text="启用密码登录",
+                        command=self._refresh_admin_status_text).grid(
+            row=5, column=0, columnspan=3, sticky="w", pady=(4, 2))
+
+        self.vars["admin_password"] = tk.StringVar()
+        self._grid_field(parent, 6, "设置新密码",
+                         ttk.Entry(parent, textvariable=self.vars["admin_password"],
+                                   width=32, show="*"),
+                         "留空表示不修改；填写后保存时自动加密写入")
+
+        self.vars["admin_password_confirm"] = tk.StringVar()
+        self._grid_field(parent, 7, "确认新密码",
+                         ttk.Entry(parent, textvariable=self.vars["admin_password_confirm"],
+                                   width=32, show="*"),
+                         "两次输入需一致")
+
+        # ---- 动态验证码 ----
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=8, column=0, columnspan=3, sticky="ew", pady=10)
+        ttk.Label(parent, text="动态验证码（TOTP）", font=("微软雅黑", 10, "bold")).grid(
+            row=9, column=0, columnspan=3, sticky="w")
+
+        self.vars["admin_use_totp"] = tk.BooleanVar()
+        ttk.Checkbutton(parent, variable=self.vars["admin_use_totp"],
+                        text="启用动态验证码登录",
+                        command=self._refresh_admin_status_text).grid(
+            row=10, column=0, columnspan=3, sticky="w", pady=(4, 2))
+
+        totp_frame = ttk.Frame(parent)
+        totp_btns = ttk.Frame(totp_frame)
+        totp_btns.pack(anchor="w")
+        ttk.Button(totp_btns, text="生成新密钥并显示二维码", width=24,
+                   command=self._generate_totp).pack(side="left")
+        ttk.Button(totp_btns, text="清除密钥", width=12,
+                   command=self._clear_totp).pack(side="left", padx=(8, 0))
+        self._grid_field(parent, 11, "TOTP 密钥管理", totp_frame,
+                         "生成后用手机验证器 App 扫码绑定即可")
+
+        self.vars["admin_totp_secret"] = tk.StringVar()
+        ttk.Entry(parent, textvariable=self.vars["admin_totp_secret"],
+                  width=40, state="readonly").grid(
+            row=12, column=1, sticky="ew", pady=4)
+
+        self.vars["admin_totp_status"] = tk.StringVar(value="")
+        ttk.Label(parent, textvariable=self.vars["admin_totp_status"],
+                  font=("微软雅黑", 9), foreground="#0066cc", wraplength=600,
+                  justify="left").grid(row=13, column=1, sticky="w")
+
+        # ---- 当前状态 ----
+        ttk.Separator(parent, orient="horizontal").grid(
+            row=14, column=0, columnspan=3, sticky="ew", pady=10)
+        self.vars["admin_status_text"] = tk.StringVar(value="")
+        ttk.Label(parent, textvariable=self.vars["admin_status_text"],
+                  font=("微软雅黑", 9), foreground="#555555", justify="left",
+                  wraplength=620).grid(row=15, column=0, columnspan=3, sticky="w")
+
+    def _generate_totp(self):
+        """生成新的 TOTP 密钥并展示二维码（需 pyotp / qrcode）。"""
+        from tkinter import messagebox
+        try:
+            import pyotp
+        except ImportError:
+            messagebox.showerror(
+                "缺少依赖",
+                "生成动态验证码需要 pyotp 组件。\n请先执行：pip install pyotp qrcode")
+            return
+
+        secret = pyotp.random_base32()
+        self.vars["admin_totp_secret"].set(secret)
+        self.vars["admin_use_totp"].set(True)
+        username = self.vars["admin_username"].get().strip() or "admin"
+
+        uri = pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name=APP_NAME)
+        shown = False
+        try:
+            import qrcode
+            # 显示一个二维码窗口，便于手机扫码
+            import tkinter as tk
+            win = tk.Toplevel(self._root)
+            win.title("扫码绑定动态验证码")
+            win.configure(bg="white")
+
+            qr = qrcode.QRCode(border=2, box_size=6)
+            qr.add_data(uri)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+
+            img_tk = None
+            try:
+                from PIL import ImageTk
+                img_tk = ImageTk.PhotoImage(img.get_image() if hasattr(img, "get_image") else img)
+            except Exception:
+                img_tk = None
+
+            if img_tk is not None:
+                lbl = tk.Label(win, image=img_tk, bg="white")
+                lbl.image = img_tk  # 防止被垃圾回收
+                lbl.pack(padx=16, pady=(16, 6))
+            else:
+                # 退化为文本二维码
+                import io
+                buf = io.StringIO()
+                qr.print_ascii(out=buf, invert=True)
+                txt = tk.Text(win, width=60, height=22, font=("Consolas", 7),
+                              bg="white", relief="flat")
+                txt.insert("1.0", buf.getvalue())
+                txt.configure(state="disabled")
+                txt.pack(padx=8, pady=8)
+                shown = True
+
+            tk.Label(win, text=f"用验证器 App 扫描上方二维码\n用户名：{username}",
+                     font=("微软雅黑", 10), bg="white").pack(pady=(0, 4))
+            tk.Label(win, text=f"密钥（手动输入时使用）：{secret}",
+                     font=("微软雅黑", 8), fg="#666666", bg="white").pack(pady=(0, 12))
+            ttk2 = __import__("tkinter.ttk", fromlist=["ttk"])
+            ttk2.Button(win, text="我已扫码完成", command=win.destroy).pack(pady=(0, 14))
+            shown = True
+            self.vars["admin_totp_status"].set("已生成新密钥，请用验证器扫码绑定，然后点击「保存」生效。")
+        except Exception as e:
+            logger.warning(f"二维码展示失败: {e}")
+
+        if not shown:
+            self.vars["admin_totp_status"].set(
+                f"已生成新密钥：{secret}\n请手动填入验证器 App，然后点击「保存」生效。")
+        else:
+            messagebox.showinfo(
+                "密钥已生成",
+                f"新的动态验证码密钥：\n\n{secret}\n\n"
+                f"绑定链接：\n{uri}\n\n"
+                "请用验证器扫码（或手动输入密钥）完成绑定，然后点击「保存」。")
+
+    def _clear_totp(self):
+        self.vars["admin_totp_secret"].set("")
+        self.vars["admin_use_totp"].set(False)
+        self.vars["admin_totp_status"].set("已清除动态验证码密钥，保存后将只能用密码登录。")
 
     def _grid_field(self, parent, row, label_text, widget, hint=None):
         import tkinter as tk
@@ -717,9 +1653,8 @@ class SettingsGUI:
         ttk.Label(lbl_frame, text=label_text, font=("微软雅黑", 10)).pack(anchor="w")
         if hint:
             ttk.Label(lbl_frame, text=hint, font=("微软雅黑", 8), foreground="#777777").pack(anchor="w")
-        widget_frame = ttk.Frame(parent)
-        widget_frame.grid(row=row, column=1, sticky="ew", pady=4)
-        widget.pack(in_=widget_frame, anchor="w", fill="x", expand=True)
+        widget.grid(row=row, column=1, sticky="ew", pady=4)
+        parent.columnconfigure(0, weight=0)
         parent.columnconfigure(1, weight=1)
 
     def _build_tab1_basic(self, parent):
@@ -936,13 +1871,36 @@ class SettingsGUI:
     def _on_toggle_advanced(self):
         show_advanced = self.advanced_mode.get() if self.advanced_mode else False
         advanced_tabs = ["WAF防护", "安全设置", "系统设置", "监控设置"]
+        # 默认停留在常用标签页，避免打开时落在高级页上让人困惑
+        default_tab = self._tab_ids.get("基础")
+
+        # 隐藏高级标签页后再重建选项卡顺序：tkinter 不允许把隐藏页放在当前选中页
+        current = None
+        try:
+            current = self.notebook.select()
+        except Exception:
+            current = None
+        if current:
+            try:
+                current_name = self.notebook.tab(current, "text")
+            except Exception:
+                current_name = None
+            if current_name in advanced_tabs and not show_advanced:
+                try:
+                    self.notebook.select(default_tab)
+                except Exception:
+                    pass
+
         for tab_name in advanced_tabs:
             tab_id = self._tab_ids[tab_name]
             if show_advanced:
                 try:
                     self.notebook.tab(tab_id, state="normal")
                 except Exception:
-                    pass
+                    try:
+                        self.notebook.add(tab_id, text=tab_name)
+                    except Exception:
+                        pass
             else:
                 try:
                     self.notebook.tab(tab_id, state="hidden")
@@ -951,6 +1909,79 @@ class SettingsGUI:
                         self.notebook.hide(tab_id)
                     except Exception:
                         pass
+
+    def _find_first_input(self, widget):
+        import tkinter as tk
+        ttk = __import__("tkinter.ttk", fromlist=["ttk"])
+        try:
+            if not widget.winfo_exists():
+                return None
+        except Exception:
+            return None
+        class_name = widget.winfo_class()
+        if class_name in ("Entry", "TEntry", "Spinbox", "TSpinbox"):
+            try:
+                state = str(widget.cget("state")).lower()
+                if state not in ("disabled", "readonly"):
+                    return widget
+            except Exception:
+                return widget
+        try:
+            children = widget.winfo_children()
+        except Exception:
+            return None
+        for child in children:
+            found = self._find_first_input(child)
+            if found is not None:
+                return found
+        return None
+
+    def _focus_first_entry(self):
+        try:
+            if not self._root or not self._root.winfo_exists():
+                return
+        except Exception:
+            return
+        target = None
+        try:
+            current_tab = self.notebook.select() if self.notebook else None
+        except Exception:
+            current_tab = None
+        if current_tab:
+            try:
+                tab_widget = self._root.nametowidget(current_tab)
+                target = self._find_first_input(tab_widget)
+            except Exception:
+                target = None
+        if target is None:
+            target = self._find_first_input(self._root)
+        if target is not None:
+            try:
+                target.focus_force()
+            except Exception:
+                try:
+                    target.focus_set()
+                except Exception:
+                    pass
+            try:
+                target.icursor("end")
+            except Exception:
+                pass
+            try:
+                target.select_range(0, "end")
+            except Exception:
+                pass
+        try:
+            self._root.focus_force()
+        except Exception:
+            pass
+
+    def _safe_focus(self, widget):
+        try:
+            if widget.winfo_exists():
+                widget.focus_force()
+        except Exception:
+            pass
 
     def reload_config(self):
         import tkinter as tk
@@ -998,6 +2029,63 @@ class SettingsGUI:
 
         self.vars["mon_max_history_samples"].set(cfg["monitor"]["max_history_samples"])
         self.vars["mon_sample_interval"].set(cfg["monitor"]["sample_interval"])
+
+        # ---- 目录与命名 ----
+        self.virtual_dirs = dict(cfg.get("virtual_dirs") or {})
+        self.hidden_folders = set(cfg.get("hidden_folders") or set())
+        self.display_names = dict(cfg.get("display_names") or {})
+        if hasattr(self, "_vdir_list"):
+            self._refresh_listbox(self._vdir_list,
+                                  [f"{k}  →  {v}" for k, v in sorted(self.virtual_dirs.items())])
+        if hasattr(self, "_hidden_list"):
+            self._refresh_listbox(self._hidden_list, sorted(self.hidden_folders))
+        if hasattr(self, "_alias_list"):
+            self._refresh_listbox(self._alias_list,
+                                  [f"{k}  →  {v}" for k, v in sorted(self.display_names.items())])
+
+        # ---- 标题设置 ----
+        if hasattr(self, "nav_title_vars"):
+            self._refresh_nav_title_widgets()
+
+        # ---- 管理账号 ----
+        admin = cfg.get("admin", {}) or {}
+        self.vars["admin_enabled"].set(bool(admin.get("enabled")))
+        self.vars["admin_username"].set(admin.get("username", ""))
+        # 密码以哈希形式存储，无法反解；输入框留空表示"不修改"
+        self.vars["admin_use_password"].set(bool(admin.get("password_hash")))
+        self.vars["admin_password"].set("")
+        self.vars["admin_password_confirm"].set("")
+        self.vars["admin_use_totp"].set(bool(admin.get("totp_secret")))
+        self.vars["admin_totp_secret"].set(admin.get("totp_secret", ""))
+        self.vars["admin_totp_status"].set("")
+        self._refresh_admin_status_text()
+
+    def _refresh_admin_status_text(self):
+        """在界面上用大白话说明当前管理账号的可用状态。"""
+        enabled = self.vars["admin_enabled"].get()
+        username = self.vars["admin_username"].get().strip()
+        use_pwd = self.vars["admin_use_password"].get()
+        use_totp = self.vars["admin_use_totp"].get() and bool(self.vars["admin_totp_secret"].get())
+
+        if not enabled:
+            self.vars["admin_status_text"].set(
+                "当前状态：管理功能已关闭，聊天室中不会显示管理入口。")
+            return
+        if not username:
+            self.vars["admin_status_text"].set(
+                "当前状态：缺少用户名，无法启用。请填写管理员用户名。")
+            return
+        if not use_pwd and not use_totp:
+            self.vars["admin_status_text"].set(
+                "当前状态：密码与动态验证码都没启用，无法登录。请至少启用其中一种。")
+            return
+        ways = []
+        if use_pwd:
+            ways.append("密码")
+        if use_totp:
+            ways.append("动态验证码")
+        self.vars["admin_status_text"].set(
+            f"当前状态：可以使用，登录时校验「{' + '.join(ways)}」。保存后选择「立即重启」即可在聊天室看到入口。")
 
     def _collect_settings(self):
         cfg = copy.deepcopy(self.cfg)
@@ -1054,25 +2142,245 @@ class SettingsGUI:
         cfg["monitor"]["max_history_samples"] = int(self.vars["mon_max_history_samples"].get())
         cfg["monitor"]["sample_interval"] = int(self.vars["mon_sample_interval"].get())
 
+        # ---- 目录与命名（整体覆盖，删除才会真正生效）----
+        cfg["virtual_dirs"] = dict(self.virtual_dirs)
+        cfg["hidden_folders"] = set(self.hidden_folders)
+        cfg["display_names"] = dict(self.display_names)
+
+        # ---- 标题图（整体覆盖，清空某页标题图才会真正生效）----
+        if hasattr(self, "nav_title_vars"):
+            cfg["nav_titles"] = {
+                page: var.get().strip()
+                for page, var in self.nav_title_vars.items()
+                if var.get().strip()
+            }
+
+        # ---- 管理账号 ----
+        cfg["admin"] = self._collect_admin_settings()
+
         return cfg
+
+    def _collect_admin_settings(self):
+        """收集管理账号设置，并在必要时把明文密码转成哈希写入配置。
+
+        密码哈希依赖 .secret 文件（与服务端登录时使用的密钥一致），
+        因此可以直接写进 config.xml，不需要用户再手工跑命令行工具。
+        """
+        cfg_admin = dict(self.cfg.get("admin") or {})
+        enabled = bool(self.vars["admin_enabled"].get())
+        username = self.vars["admin_username"].get().strip()
+
+        use_password = bool(self.vars["admin_use_password"].get())
+        new_pwd = self.vars["admin_password"].get()
+        confirm_pwd = self.vars["admin_password_confirm"].get()
+
+        # 输入了新密码 -> 校验并生成哈希
+        if new_pwd or confirm_pwd:
+            if new_pwd != confirm_pwd:
+                raise ValueError("两次输入的密码不一致，请重新输入。")
+            if len(new_pwd) < 4:
+                raise ValueError("密码至少需要 4 位。")
+            cfg_admin["password_hash"] = self._hash_password(new_pwd)
+            use_password = True
+        elif not use_password:
+            # 主动取消了密码登录
+            cfg_admin["password_hash"] = ""
+
+        use_totp = bool(self.vars["admin_use_totp"].get())
+        secret = self.vars["admin_totp_secret"].get().strip()
+        if use_totp:
+            if not secret:
+                raise ValueError("已启用动态验证码，但还没有生成密钥。请点击「生成新密钥并显示二维码」。")
+            cfg_admin["totp_secret"] = secret
+        else:
+            cfg_admin["totp_secret"] = ""
+
+        if enabled:
+            if not username:
+                raise ValueError("已启用管理功能，但还没有填写管理员用户名。")
+            if not cfg_admin.get("password_hash") and not cfg_admin.get("totp_secret"):
+                raise ValueError(
+                    "已启用管理功能，但密码与动态验证码都没有设置。\n"
+                    "请至少启用其中一种验证方式。")
+
+        cfg_admin["enabled"] = enabled
+        cfg_admin["username"] = username
+        return cfg_admin
+
+    def _hash_password(self, password: str) -> str:
+        """与服务端一致的密码哈希算法：sha256(密码 + 会话密钥)。"""
+        import hashlib
+        secret = ""
+        secret_file = (self.cfg.get("paths") or {}).get("secret_file", ".secret")
+        candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(self.config_path)), secret_file),
+            os.path.join(BASE_DIR, secret_file),
+            os.path.join(BASE_DIR, ".secret"),
+        ]
+        for path in candidates:
+            try:
+                if os.path.exists(path):
+                    with open(path, "r", encoding="utf-8") as f:
+                        secret = f.read().strip()
+                    if secret:
+                        break
+            except Exception:
+                continue
+        if not secret:
+            logger.warning("未找到会话密钥文件，生成的密码哈希可能无法通过登录校验")
+        return hashlib.sha256((password + secret).encode()).hexdigest()
+
+    def _show_about(self):
+        """「关于」弹窗：版本、作者、项目地址与开源致谢。"""
+        from tkinter import Toplevel
+        import tkinter as tk
+        win = Toplevel(self._root)
+        win.title("关于")
+        win.transient(self._root)
+        win.resizable(False, False)
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+
+        frame = tk.Frame(win, padx=22, pady=18)
+        frame.pack(fill="both", expand=True)
+
+        try:
+            from version import get_version_string, APP_AUTHOR
+            ver_text = get_version_string()
+            author = APP_AUTHOR
+        except Exception:
+            ver_text = APP_VER
+            author = "HZYANG"
+
+        tk.Label(frame, text="719WebF",
+                 font=("微软雅黑", 13, "bold")).pack(anchor="center")
+        tk.Label(frame, text=ver_text,
+                 font=("微软雅黑", 10), fg="#555555").pack(anchor="center", pady=(3, 12))
+
+        info = [
+            ("作者", author),
+            ("项目地址", "github.com/HZYANG-2486/719WebF"),
+        ]
+        for label, value in info:
+            row = tk.Frame(frame)
+            row.pack(anchor="w", pady=1)
+            tk.Label(row, text=f"{label}：", font=("微软雅黑", 9),
+                     fg="#777777").pack(side="left")
+            tk.Label(row, text=value, font=("微软雅黑", 9)).pack(side="left")
+
+        tk.Label(frame, text="开源致谢", font=("微软雅黑", 9, "bold"),
+                 fg="#555555").pack(anchor="w", pady=(14, 3))
+        credits = [
+            "live2d-widget — 看板娘组件",
+            "chart.js — 图表绘制",
+            "Cloudflare error page — 错误页样式",
+            "SCEditor — 聊天室BBCode可视化编辑支持"
+        ]
+        for c in credits:
+            tk.Label(frame, text=f"· {c}", font=("微软雅黑", 8),
+                     fg="#666666").pack(anchor="w")
+
+        def _open_repo():
+            try:
+                webbrowser.open("https://github.com/HZYANG-2486/719WebF")
+            except Exception:
+                pass
+
+        btns = tk.Frame(frame)
+        btns.pack(fill="x", pady=(16, 0))
+        tk.Button(btns, text="打开项目主页", command=_open_repo,
+                  font=("微软雅黑", 9)).pack(side="left")
+        tk.Button(btns, text="关闭", command=win.destroy,
+                  font=("微软雅黑", 9), width=9).pack(side="right")
+
+        win.update_idletasks()
+        try:
+            x = self._root.winfo_rootx() + (self._root.winfo_width() - win.winfo_width()) // 2
+            y = self._root.winfo_rooty() + (self._root.winfo_height() - win.winfo_height()) // 3
+            win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            pass
 
     def _on_save(self):
         from tkinter import messagebox
         try:
             cfg = self._collect_settings()
+        except ValueError as e:
+            # 业务校验失败（如两次密码不一致）：直接告诉用户怎么改
+            messagebox.showwarning("请检查填写内容", str(e))
+            return
+        except Exception as e:
+            messagebox.showerror("保存失败", f"读取设置时出错：{e}")
+            return
+
+        try:
+            warnings = []
             try:
                 from app import validate_config
                 ok, errs = validate_config(cfg)
                 if not ok:
-                    messagebox.showwarning("配置警告", "\n".join(errs))
+                    warnings = list(errs)
             except Exception:
                 pass
+
+            # 保存前先拦截两类"看着能存、用起来出问题"的命名冲突：
+            # 1) 虚拟目录别名与共享目录里真实文件夹同名（列表显示 A、点开是 B）
+            # 2) 显示别名含斜杠或重名（列表里两条分不清）
+            blocking = check_vdir_conflicts(cfg.get("virtual_dirs") or {},
+                                            cfg.get("share_dir") or "")
+            dnames = cfg.get("display_names") or {}
+            for real, shown in dnames.items():
+                bad, why = name_is_illegal(shown)
+                if bad:
+                    blocking.append(f"「{real}」的显示名称不可用：{why}")
+            seen = {}
+            for real, shown in dnames.items():
+                if shown in seen and seen[shown] != real:
+                    blocking.append(
+                        f"显示名称「{shown}」被「{seen[shown]}」和「{real}」同时使用，"
+                        "列表里会无法区分。请改成不同的名字。")
+                seen[shown] = real
+            if blocking:
+                messagebox.showwarning(
+                    "请先修正这些冲突",
+                    "发现以下问题，暂未保存：\n\n" + "\n".join(f"· {x}" for x in blocking))
+                return
+
             save_config(self.config_path, cfg)
             self.cfg = load_config(self.config_path)
             self.reload_config()
             if self.on_save_callback:
                 self.on_save_callback(self.cfg)
-            messagebox.showinfo("成功", "配置已保存！建议重启应用生效。")
+
+            msg = "配置已保存。"
+            admin = cfg.get("admin") or {}
+            if admin.get("enabled"):
+                ways = []
+                if admin.get("password_hash"):
+                    ways.append("密码")
+                if admin.get("totp_secret"):
+                    ways.append("动态验证码")
+                msg += f"\n\n管理功能已启用，登录方式：{' + '.join(ways) or '（未设置）'}。"
+            if warnings:
+                msg += "\n\n提醒：\n" + "\n".join(warnings)
+
+            # 大部分配置项需要重启才会生效，这里直接问一句，省得用户自己去找重启入口
+            if self.on_restart_callback:
+                msg += "\n\n是否立即重启，让改动马上生效？"
+                if messagebox.askyesno("保存成功", msg):
+                    messagebox.showinfo("正在重启", "服务即将重启，窗口会自动关闭。\n"
+                                                    "约 3 秒后可重新打开页面。")
+                    try:
+                        self._destroy()
+                    except Exception:
+                        pass
+                    self.on_restart_callback()
+                    return
+            else:
+                msg += "\n\n重启服务后生效。"
+                messagebox.showinfo("保存成功", msg)
         except Exception as e:
             messagebox.showerror("保存失败", str(e))
 
@@ -1125,10 +2433,107 @@ class SettingsGUI:
         self._destroy()
 
 
-def open_settings_gui(config_path: str, on_save_callback: Optional[Callable[[Dict[str, Any]], None]] = None):
-    app = SettingsGUI(config_path, on_save_callback)
+def open_settings_gui(config_path: str, on_save_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+                      on_restart_callback: Optional[Callable[[], None]] = None):
+    """创建设置窗口并运行其消息循环。
+
+    为保证 Tkinter 线程安全 + 在部分 Windows 机器上避免"控件不绘制/看不到输入点"：
+    - 在当前线程中创建并独占 Tk（不与其他 Tk 主循环交叉）；
+    - 启用 DPI 感知、强制更新后再进入主循环；
+    - 所有 Entry/Spinbox 在 create_window 末尾做一次显式 state=normal 兜底。
+
+    on_restart_callback: 保存后若用户选择"立即重启"，调用它让配置生效。
+    """
+    try:
+        import tkinter as tk
+        try:
+            if os.name == "nt":
+                try:
+                    import ctypes
+                    try:
+                        # PROCESS_PER_MONITOR_DPI_AWARE = 2，避免高 DPI 下窗口尺寸错位/控件被裁掉
+                        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+                    except (AttributeError, OSError):
+                        try:
+                            ctypes.windll.user32.SetProcessDPIAware()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    except ImportError:
+        logger.error("tkinter 不可用")
+        return None
+    app = SettingsGUI(config_path, on_save_callback, on_restart_callback)
+    try:
+        root = app.create_window()
+        if root is not None:
+            try:
+                root.deiconify()
+            except Exception:
+                pass
+            # 兜底：所有 Entry/Spinbox 即使被错误置为 disabled 也恢复可输入状态
+            def _unlock_inputs(w):
+                try:
+                    for child in w.winfo_children():
+                        cls = child.winfo_class()
+                        if cls in ("Entry", "TEntry", "Spinbox", "TSpinbox"):
+                            try:
+                                child.configure(state="normal")
+                            except Exception:
+                                pass
+                        _unlock_inputs(child)
+                except Exception:
+                    pass
+            try:
+                root.update_idletasks()
+                _unlock_inputs(root)
+                root.update()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.error(f"创建设置窗口失败: {e}")
+        return None
     app.run()
     return app
+
+
+# Settings 专用常驻 Tk 线程：保证任何情况下（托盘回调/后台线程触发）都在同一线程创建窗口。
+_SETTINGS_LOCK = threading.Lock()
+_SETTINGS_THREAD = None
+_SETTINGS_THREAD_ALIVE = False
+
+
+def _settings_worker(config_path, on_save_callback, on_restart_callback, done_event):
+    """设置窗口线程。同一时刻只允许一个设置窗口存在。"""
+    global _SETTINGS_THREAD_ALIVE
+    try:
+        _SETTINGS_THREAD_ALIVE = True
+        try:
+            open_settings_gui(config_path, on_save_callback, on_restart_callback)
+        finally:
+            done_event.set()
+    finally:
+        _SETTINGS_THREAD_ALIVE = False
+
+
+def open_settings_gui_threadsafe(config_path: str, on_save_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+                                 on_restart_callback: Optional[Callable[[], None]] = None):
+    """线程安全入口。若已有设置窗口则激活前台（若能）并跳过创建。"""
+    global _SETTINGS_THREAD
+    with _SETTINGS_LOCK:
+        if _SETTINGS_THREAD_ALIVE:
+            logger.info("设置窗口已打开，跳过重复创建")
+            return
+        done = threading.Event()
+        _SETTINGS_THREAD = threading.Thread(
+            target=_settings_worker,
+            args=(config_path, on_save_callback, on_restart_callback, done),
+            name="SettingsGUIThread",
+            daemon=False,
+        )
+        _SETTINGS_THREAD.start()
 
 
 class GUIManager:
@@ -1137,12 +2542,14 @@ class GUIManager:
         config_path: str = DEFAULT_CONFIG_FILE,
         on_start_service: Optional[Callable[[], None]] = None,
         on_stop_service: Optional[Callable[[], None]] = None,
+        on_restart_service: Optional[Callable[[], None]] = None,
         headless: bool = False,
         logo_path: str = "logo.png"
     ):
         self.config_path = config_path
         self.on_start_service = on_start_service
         self.on_stop_service = on_stop_service
+        self.on_restart_service = on_restart_service
         self.headless = headless
         self.logo_path = logo_path
         self._icon = None
@@ -1176,11 +2583,24 @@ class GUIManager:
         webbrowser.open(f"{protocol}://127.0.0.1:{port}/transfer")
 
     def _open_settings(self, icon=None, item=None):
-        threading.Thread(
-            target=open_settings_gui,
-            args=(self.config_path, self._on_config_saved),
-            daemon=True
-        ).start()
+        open_settings_gui_threadsafe(self.config_path, self._on_config_saved, self._on_restart_requested)
+
+    def _on_restart_requested(self):
+        """设置界面里用户点了"立即重启"：先关掉托盘再重启进程，避免残留图标。"""
+        self.stop()
+        if self.on_restart_service:
+            self.on_restart_service()
+
+    def _restart_service(self, icon=None, item=None):
+        """托盘菜单：重启服务，让配置改动生效。"""
+        if not self.on_restart_service:
+            logger.warning("当前运行方式不支持自动重启")
+            return
+        self.reload_config()
+        try:
+            self.on_restart_service()
+        except BaseException as e:
+            logger.error(f"重启失败: {e}")
 
     def _on_config_saved(self, new_cfg: Dict[str, Any]):
         self.cfg = new_cfg
@@ -1188,8 +2608,10 @@ class GUIManager:
     def _exit_app(self, icon=None, item=None):
         self.stop()
         if self.on_stop_service:
-            self.on_stop_service()
-        sys.exit(0)
+            try:
+                self.on_stop_service()
+            except BaseException:
+                pass
 
     def _create_icon_image(self):
         _ensure_pystray()
@@ -1208,6 +2630,7 @@ class GUIManager:
             _item("🌐 打开首页", self._open_index),
             _item("📁 传输中心", self._open_transfer),
             _item("⚙️ 程序设置", self._open_settings),
+            _item("🔄 重启服务", self._restart_service),
             _pystray.Menu.SEPARATOR,
             _item("❌ 关闭服务器", self._exit_app),
         ]

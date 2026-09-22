@@ -42,17 +42,55 @@ from threading import Lock
 import xml.etree.ElementTree as ET
 import bbcode
 import re
+import storage
+try:
+    import pyotp
+except ImportError:
+    pyotp = None
 
 # ===================== 应用常量定义 =====================
 # 版本信息已迁移到 version.py，以上方 import 为准
-CONFIG_FILE = "config.xml"
+
+# 可以自定义标题图标的页面：标识 -> 页面中文名（顺序即设置界面里的显示顺序）。
+# 这里的标识是配置文件和模板之间的约定，改动需同步 gui.py 与各模板。
+NAV_ICON_PAGES = {
+    "home": "首页",
+    "files": "文件浏览",
+    "transfer": "传输中心",
+    "chat": "聊天室",
+    "health": "状态监控",
+}
+
+def _resolve_app_config_file():
+    """把默认 config.xml 解析为相对于 main.py / 可执行文件目录的绝对路径，
+    避免因 CWD 差异导致"看不到配置 / 需要手动移植"。
+    """
+    base_dir = None
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        try:
+            script = os.path.abspath(sys.argv[0]) if sys.argv else ""
+            if script and os.path.isdir(os.path.dirname(script)):
+                base_dir = os.path.dirname(script)
+        except Exception:
+            base_dir = None
+    if not base_dir:
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+        except Exception:
+            base_dir = os.getcwd()
+    return os.path.join(base_dir, "config.xml")
+
+
+CONFIG_FILE = _resolve_app_config_file()
 
 
 def get_default_cfg() -> dict:
     return {
         "share_dir": ".",
         "port": 5000,
-        "title": "719WebF 文件分享站",
+        "title": "719WebF",
         "host": "0.0.0.0",
         "enable_https": False,
         "cert_file": "",
@@ -120,6 +158,19 @@ def get_default_cfg() -> dict:
             "max_history_samples": 360,
             "sample_interval": 10,
         },
+        "admin": {
+            "enabled": False,
+            "username": "",
+            "password_hash": "",
+            "totp_secret": "",
+        },
+        "virtual_dirs": {},
+        "hidden_folders": set(),
+        "display_names": {},
+        # 标题图：{页面标识: 图片路径}。用于把整块标题文字换成一幅设计好的图片。
+        # 页面标识固定为 home/files/transfer/chat/health；
+        # 留空表示不启用（继续显示原来的符号与文字）。默认不启用。
+        "nav_titles": {},
     }
 
 
@@ -134,11 +185,25 @@ def merge_with_defaults(partial_cfg) -> dict:
         if k in partial_cfg:
             result[k] = partial_cfg[k]
     child_nodes = ["chat", "paths", "p2p", "file_transfer",
-                   "waf", "security", "system", "monitor"]
+                   "waf", "security", "system", "monitor", "admin"]
     for node in child_nodes:
         if node in partial_cfg and partial_cfg[node] is not None:
             for k, v in partial_cfg[node].items():
                 result[node][k] = v
+    # 虚拟目录：{显示名: 物理路径} 映射。
+    # 这里必须整体替换而不是增量合并——否则用户在设置界面删掉的条目
+    # 会因为"默认值里还留着"而复活，导致删除操作看起来无效。
+    if "virtual_dirs" in partial_cfg and partial_cfg["virtual_dirs"] is not None:
+        result["virtual_dirs"] = dict(partial_cfg["virtual_dirs"])
+    # 隐藏文件夹：不列出但可直接访问的名称集合（同样整体替换）
+    if "hidden_folders" in partial_cfg and partial_cfg["hidden_folders"] is not None:
+        result["hidden_folders"] = set(partial_cfg["hidden_folders"])
+    # 显示别名：{真实名称: 列表显示名}
+    if "display_names" in partial_cfg and partial_cfg["display_names"] is not None:
+        result["display_names"] = dict(partial_cfg["display_names"])
+    # 标题图：整体替换，清空后才能退回文字标题
+    if "nav_titles" in partial_cfg and partial_cfg["nav_titles"] is not None:
+        result["nav_titles"] = dict(partial_cfg["nav_titles"])
     return result
 
 
@@ -229,6 +294,40 @@ def validate_config(cfg):
         if isinstance(value, str) and value == "":
             errors.append(f"{name} 不能为空字符串")
 
+    # 管理账号：启用时必须配置用户名，且密码 / 动态验证码至少配置一项
+    admin = cfg.get("admin", {}) or {}
+    if admin.get("enabled"):
+        if not admin.get("username"):
+            errors.append("admin.enabled=true 但未配置 admin.username")
+        if not admin.get("password_hash") and not admin.get("totp_secret"):
+            errors.append(
+                "admin.enabled=true 但密码与动态验证码都未配置（请在设置界面生成管理账号）"
+            )
+
+    # 虚拟目录：名称不能含路径分隔符或 ..，路径可以是共享目录之外的任意位置。
+    #
+    # 这里刻意不限制"必须在共享目录内"。虚拟目录的用途就是给共享目录之外的
+    # 文件夹起一个别名（比如把 D:\资料 挂成"资料库"），强制它落在共享目录里
+    # 等于让这个功能失去意义。安全由两道防线保证，而不是靠限制路径位置：
+    #   1) 别名只能由管理员在本机设置界面 / config.xml 里预先配置，访客无法自助添加；
+    #   2) 访问时 get_safe_path 仍以该别名指向的目录为边界，
+    #      访客无法用 .. 、绝对路径等手段越出这个目录去读别的东西。
+    share_abs = os.path.abspath(cfg.get("share_dir", ".") or ".")
+    for vname, vpath in (cfg.get("virtual_dirs") or {}).items():
+        if not vname or "/" in vname or "\\" in vname or vname in (".", ".."):
+            errors.append(f"virtual_dirs 名称非法: {vname!r}（不能包含 / \\ 或为 . / ..）")
+        if not vpath:
+            errors.append(f"virtual_dirs[{vname}] 未填写路径")
+            continue
+        if not os.path.isabs(vpath):
+            vpath = os.path.join(share_abs, vpath)
+        vabs = os.path.abspath(vpath)
+        # 指向自身会造成循环展示，需要拦掉；除此之外一律放行
+        if vabs == share_abs:
+            errors.append(f"virtual_dirs[{vname}] 不能指向共享目录本身: {vabs}")
+        if not os.path.isdir(vabs):
+            logging.warning(f"virtual_dirs[{vname}] 目标目录不存在，将显示为空: {vabs}")
+
     return (len(errors) == 0, errors)
 
 
@@ -247,7 +346,7 @@ def create_default_config(config_path=None):
     el = ET.SubElement(root, "port")
     el.text = str(default_cfg["port"])
 
-    root.append(ET.Comment("网站标题名称，默认 \"719WebF 文件分享站\"，将显示于网页标题栏"))
+    root.append(ET.Comment("网站标题名称，默认 \"719WebF\"，将显示于网页标题栏"))
     el = ET.SubElement(root, "title")
     el.text = default_cfg["title"]
 
@@ -463,18 +562,56 @@ def create_default_config(config_path=None):
     el = ET.SubElement(chat_el, "max_message_length")
     el.text = str(default_cfg["chat"]["max_message_length"])
 
+    admin_el = ET.SubElement(root, "admin")
+    admin_el.append(ET.Comment(
+        "管理账号：用于删除不合适的聊天消息。enabled 控制是否启用（默认 false）。"
+        "password_hash/totp_secret 请用 db_tool.py 生成，切勿手填明文密码。"
+    ))
+    admin_el.set("enabled", "false")
+    admin_el.set("username", "")
+    admin_el.set("password_hash", "")
+    admin_el.set("totp_secret", "")
+
+    vdirs_el = ET.SubElement(root, "virtual_dirs")
+    vdirs_el.append(ET.Comment(
+        "虚拟目录：让某个文件夹以别名出现在列表中（映射到本机物理路径）。"
+        "路径必须位于共享目录内（相对路径会被解析为共享目录下），否则将被忽略。"
+        "示例：<dir name=\"docs\" path=\"sub/docs\" />"
+    ))
+
+    hidden_el = ET.SubElement(root, "hidden_folders")
+    hidden_el.append(ET.Comment(
+        "隐藏文件夹：列表中将不显示这些名称的文件夹（输入完整名称匹配，仍可直接访问）。"
+        "示例：<folder name=\"secret\" />"
+    ))
+
+    names_el = ET.SubElement(root, "display_names")
+    names_el.append(ET.Comment(
+        "显示别名：列表中把某条目显示成另一个名字，不改动磁盘上的真实文件名。"
+        "示例：<item name=\"real_folder\" as=\"对外显示的名字\" />"
+    ))
+
     tree = ET.ElementTree(root)
+    parent = os.path.dirname(os.path.abspath(config_path))
+    if parent and not os.path.isdir(parent):
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except Exception as e:
+            raise IOError(f"创建配置目录失败: {parent} ({e})") from e
     tmp_file = config_path + ".tmp"
     try:
         with open(tmp_file, "wb") as f:
             tree.write(f, encoding="utf-8", xml_declaration=True)
         os.replace(tmp_file, config_path)
-    except Exception:
+    except Exception as e:
         if os.path.exists(tmp_file):
             try:
                 os.remove(tmp_file)
             except Exception:
                 pass
+        logging.error(f"生成默认配置文件失败: {config_path}, 错误: {e}")
+        raise IOError(f"生成默认配置文件 {config_path} 失败: {e}") from e
+
 
 def _parse_set(text):
     if not text:
@@ -487,6 +624,11 @@ def load_config(config_path=None, _depth=0):
         config_path = CONFIG_FILE
 
     if not os.path.exists(config_path):
+        try:
+            create_default_config(config_path)
+            logging.info(f"配置文件不存在，已生成默认配置: {config_path}")
+        except Exception as e:
+            logging.warning(f"生成默认配置失败: {e}")
         return merge_with_defaults({})
 
     try:
@@ -500,7 +642,7 @@ def load_config(config_path=None, _depth=0):
     partial_cfg = {
         "share_dir": root.findtext("share_dir", "."),
         "port": int(root.findtext("port", "5000")),
-        "title": root.findtext("title", "719WebF 文件分享站"),
+        "title": root.findtext("title", "719WebF"),
         "host": root.findtext("host", "0.0.0.0"),
         "enable_https": root.findtext("enable_https", "false").lower() == "true",
         "cert_file": root.findtext("cert_file", ""),
@@ -597,6 +739,55 @@ def load_config(config_path=None, _depth=0):
             "sample_interval": int(mon_node.findtext("sample_interval", "10")),
         }
 
+    admin_node = root.find("admin")
+    if admin_node is not None:
+        partial_cfg["admin"] = {
+            "enabled": (admin_node.get("enabled", "false").lower() == "true"),
+            "username": admin_node.get("username", ""),
+            "password_hash": admin_node.get("password_hash", ""),
+            "totp_secret": admin_node.get("totp_secret", ""),
+        }
+
+    vdirs_node = root.find("virtual_dirs")
+    if vdirs_node is not None:
+        vdirs = {}
+        for d in vdirs_node.findall("dir"):
+            name = (d.get("name") or "").strip()
+            path = (d.get("path") or "").strip()
+            if name and path:
+                vdirs[name] = path
+        partial_cfg["virtual_dirs"] = vdirs
+
+    hidden_node = root.find("hidden_folders")
+    if hidden_node is not None:
+        partial_cfg["hidden_folders"] = set(
+            (f.get("name") or "").strip()
+            for f in hidden_node.findall("folder")
+            if (f.get("name") or "").strip()
+        )
+
+    # 显示别名：把某个条目在列表中显示成另一个名字（不改动磁盘上的真实名称）
+    names_node = root.find("display_names")
+    if names_node is not None:
+        display_names = {}
+        for node in names_node.findall("item"):
+            real = (node.get("name") or "").strip()
+            shown = (node.get("as") or "").strip()
+            if real and shown:
+                display_names[real] = shown
+        partial_cfg["display_names"] = display_names
+
+    # 标题图：<page name="chat" image="/path/to/banner.png" />
+    titles_node = root.find("nav_titles")
+    if titles_node is not None:
+        nav_titles = {}
+        for node in titles_node.findall("page"):
+            key = (node.get("name") or "").strip()
+            image = (node.get("image") or "").strip()
+            if key in NAV_ICON_PAGES:
+                nav_titles[key] = image
+        partial_cfg["nav_titles"] = nav_titles
+
     cfg = merge_with_defaults(partial_cfg)
     ok, errors = validate_config(cfg)
     if not ok:
@@ -621,7 +812,7 @@ def save_config(config_path, cfg):
 
     _write_field(root, "share_dir", cfg["share_dir"], "共享目录路径，默认 \".\" 表示当前目录，所有分享文件均基于此目录提供访问")
     _write_field(root, "port", cfg["port"], "服务监听端口号，默认 5000，建议范围 1024-65535")
-    _write_field(root, "title", cfg["title"], "网站标题名称，默认 \"719WebF 文件分享站\"，将显示于网页标题栏")
+    _write_field(root, "title", cfg["title"], "网站标题名称，默认 \"719WebF\"，将显示于网页标题栏")
     _write_field(root, "host", cfg["host"], "服务监听主机地址，默认 \"0.0.0.0\" 表示监听所有网卡接口，如需本地测试可改为 \"127.0.0.1\"")
     _write_field(root, "enable_https", cfg["enable_https"], "是否启用 HTTPS 加密通信，默认 false，启用后需同时配置 cert_file 和 key_file")
     _write_field(root, "cert_file", cfg["cert_file"], "SSL 证书文件路径，HTTPS 启用时必填，默认空字符串表示未配置")
@@ -681,7 +872,6 @@ def save_config(config_path, cfg):
     _write_field(monitor, "sample_interval", cfg["monitor"]["sample_interval"], "性能监控样本采集间隔（秒），每隔多久采集一次 CPU/内存/请求量等数据，默认 10")
 
     chat_el = ET.SubElement(root, "chat")
-    _write_field(chat_el, "max_messages", cfg["chat"]["max_messages"], "单聊天室最大消息保留条数（单位：条），超出后将删除最早的历史消息，建议 100-10000，默认 500")
     _write_field(chat_el, "room_timeout_hours", cfg["chat"]["room_timeout_hours"], "聊天室空闲超时时间（单位：小时），超过此时长无消息的房间将被自动回收，建议 1-168，默认 24")
     _write_field(chat_el, "message_rate", cfg["chat"]["message_rate"], "单用户发送消息速率上限（单位：条/窗口时间），建议 1-60，默认 10")
     _write_field(chat_el, "message_rate_window", cfg["chat"]["message_rate_window"], "消息速率统计窗口（单位：秒），配合 message_rate 使用，默认 60")
@@ -690,18 +880,70 @@ def save_config(config_path, cfg):
     _write_field(chat_el, "http_timeout", cfg["chat"]["http_timeout"], "聊天接口 HTTP 请求超时时间（单位：秒），用于长轮询等场景，建议 10-120，默认 30")
     _write_field(chat_el, "max_message_length", cfg["chat"]["max_message_length"], "单条聊天消息最大字符长度，超过长度的消息将被拒绝，默认 2000")
 
+    admin_el = ET.SubElement(root, "admin")
+    admin_el.append(ET.Comment(
+        "管理账号：用于删除不合适的聊天消息。enabled 控制是否启用（默认 false）。"
+        "password_hash/totp_secret 请用 db_tool.py 生成，切勿手填明文密码。"
+    ))
+    admin_el.set("enabled", "true" if cfg["admin"].get("enabled") else "false")
+    admin_el.set("username", str(cfg["admin"].get("username", "")))
+    admin_el.set("password_hash", str(cfg["admin"].get("password_hash", "")))
+    admin_el.set("totp_secret", str(cfg["admin"].get("totp_secret", "")))
+
+    vdirs_el = ET.SubElement(root, "virtual_dirs")
+    vdirs_el.append(ET.Comment(
+        "虚拟目录：让某个文件夹以别名出现在列表中（映射到本机物理路径）。"
+        "路径必须位于共享目录内（相对路径会被解析为共享目录下），否则将被忽略。"
+    ))
+    for _name, _path in sorted((cfg.get("virtual_dirs") or {}).items()):
+        ET.SubElement(vdirs_el, "dir", {"name": str(_name), "path": str(_path)})
+
+    hidden_el = ET.SubElement(root, "hidden_folders")
+    hidden_el.append(ET.Comment(
+        "隐藏文件夹：列表中将不显示这些名称的文件夹（输入完整名称匹配，仍可直接访问）。"
+    ))
+    for _name in sorted(cfg.get("hidden_folders") or set()):
+        ET.SubElement(hidden_el, "folder", {"name": str(_name)})
+
+    names_el = ET.SubElement(root, "display_names")
+    names_el.append(ET.Comment(
+        "显示别名：列表中把某条目显示成另一个名字，不改动磁盘上的真实文件名。"
+        "示例：<item name=\"real_folder\" as=\"对外显示的名字\" />"
+    ))
+    for _real, _shown in sorted((cfg.get("display_names") or {}).items()):
+        ET.SubElement(names_el, "item", {"name": str(_real), "as": str(_shown)})
+
+    titles_el = ET.SubElement(root, "nav_titles")
+    titles_el.append(ET.Comment(
+        "标题图：把整块标题文字换成一幅图片（横幅/艺术字）。name 可选 "
+        + "/".join(NAV_ICON_PAGES.keys())
+        + "；image 填本地图片的绝对路径（如 \"D:\\\\我的图\\\\banner.png\"），"
+        "留空则不启用、继续显示图标和文字。图片高度自动适配标题栏，宽度按比例。"
+    ))
+    for _page in NAV_ICON_PAGES:
+        _img = (cfg.get("nav_titles") or {}).get(_page, "")
+        ET.SubElement(titles_el, "page", {"name": _page, "image": str(_img)})
+
     tree = ET.ElementTree(root)
+    parent = os.path.dirname(os.path.abspath(config_path))
+    if parent and not os.path.isdir(parent):
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except Exception as e:
+            raise IOError(f"创建配置目录失败: {parent} ({e})") from e
     tmp_path = config_path + ".tmp"
     try:
         with open(tmp_path, "wb") as f:
             tree.write(f, encoding="utf-8", xml_declaration=True)
         os.replace(tmp_path, config_path)
-    except Exception:
+    except Exception as e:
         if os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
             except Exception:
                 pass
+        logging.error(f"写入配置文件失败: {config_path}, 错误: {e}")
+        raise IOError(f"写入配置文件 {config_path} 失败: {e}") from e
 
 CONFIG = load_config()
 
@@ -834,9 +1076,12 @@ app = Flask(__name__)
 
 @app.context_processor
 def inject_version_info():
+    # nav_titles 在这里统一注入：各页面标题栏都要用，逐个 render_template 传参
+    # 容易漏（尤其 monitor.py 里的状态页是另一个蓝图）。
     return {
         'app_name': APP_NAME,
-        'app_ver': APP_VER
+        'app_ver': APP_VER,
+        'nav_titles': get_nav_titles(),
     }
 
 # 持久化 secret key，避免重启后 session 失效
@@ -859,6 +1104,11 @@ app.secret_key = load_or_create_secret()
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SECURE'] = False  # Will be updated after config load
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+
+def _get_site_secret():
+    """站点密钥，用于给本地图标路径签名。直接复用 Flask 的 secret_key。"""
+    return app.secret_key
 
 STATIC_FOLDER = os.path.join(app.root_path, _paths_cfg.get("static_folder", "static"))
 UPLOAD_TEMP_FOLDER = os.path.join(app.root_path, _paths_cfg.get("upload_temp_folder", "temp_uploads"))
@@ -962,6 +1212,10 @@ _used_tokens_lock = Lock()
 
 def _cleanup_used_tokens():
     """Remove expired tokens from _used_tokens set."""
+    # 这里必须声明 global：下面有 ``_used_tokens -= expired`` 这样的赋值，
+    # 若不加声明，Python 会把 _used_tokens 当成局部变量，
+    # 于是上面的 ``for token in _used_tokens`` 会先抛 UnboundLocalError。
+    global _used_tokens
     with _used_tokens_lock:
         now = time.time()
         expired = set()
@@ -977,12 +1231,28 @@ def _cleanup_used_tokens():
         _used_tokens -= expired
 _waf_rate_blocked = 0
 _waf_rate_blocked_lock = Lock()
-_waf_verified_ips = set()
+# 已通过验证的身份 → 过期时间戳。用 dict 而不是 set，是为了能按龄清理：
+# 早前是纯集合，只增不减，长期运行会一直吃内存（同一个 IP 换端口就多一条）。
+_waf_verified_ips = {}
 _waf_verified_ips_lock = Lock()
 _waf_challenge_ips = {}
 _waf_challenge_lock = Lock()
 _waf_total_challenges = 0
 _waf_total_challenges_lock = Lock()
+
+# 已通过验证的身份保留多久。cookie 本身是 CHALLENGE_EXPIRE 秒有效，这里留同样
+# 的长度，保证在 cookie 有效期内不会被误清掉（否则用户会被反复要求验证）。
+WAF_VERIFIED_TTL = CHALLENGE_EXPIRE
+
+
+def _cleanup_verified_ips(now=None):
+    """清掉过期的“已通过验证”记录，防止集合无限膨胀。"""
+    now = now if now is not None else time.time()
+    with _waf_verified_ips_lock:
+        expired = [ip for ip, exp in _waf_verified_ips.items() if exp <= now]
+        for ip in expired:
+            del _waf_verified_ips[ip]
+    return len(expired)
 
 def _check_download_rate_limit(ip, fid):
     now = time.time()
@@ -1026,33 +1296,116 @@ def _is_pure_loopback_ip(ip):
     return False
 
 def _get_local_machine_ips():
-    """Get all IP addresses owned by this machine (excluding loopback)."""
+    """Get all IP addresses owned by this machine (excluding loopback).
+
+    使用非阻塞超时 + 线程保护，避免 RadminLAN / 无外网环境下 getaddrinfo / UDP connect
+    长时间阻塞（原来可能挂 4-5 分钟）。
+    """
     global _LOCAL_IPS
     with _LOCAL_IPS_LOCK:
         if _LOCAL_IPS is not None:
             return _LOCAL_IPS
     ips = set()
+
+    # 方式1：优先枚举本机所有网卡的真实绑定地址，不走 DNS（最快、最可靠）。
+    def _collect_via_bind():
+        result = set()
+        try:
+            import netifaces  # 可选，若已安装直接使用
+            for iface in netifaces.interfaces():
+                try:
+                    for af in (netifaces.AF_INET, netifaces.AF_INET6):
+                        addrs = netifaces.ifaddresses(iface).get(af, [])
+                        for a in addrs:
+                            ip = a.get("addr", "")
+                            if ip and not _is_pure_loopback_ip(ip) and "%" not in ip:
+                                result.add(ip.split("%")[0])
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        if not result:
+            # 无 netifaces：枚举常见私有/虚拟网段的本地监听探测替代（耗时可忽略）
+            candidates = ["0.0.0.0"]  # fallback，不加入结果
+            try:
+                hostname = socket.gethostname()
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.settimeout(0.8)
+                    s.connect(("1.1.1.1", 53))
+                    ip = s.getsockname()[0]
+                    s.close()
+                    if ip and not _is_pure_loopback_ip(ip):
+                        result.add(ip)
+                except Exception:
+                    pass
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.settimeout(0.6)
+                    s.connect((hostname, 1))
+                    ip = s.getsockname()[0]
+                    s.close()
+                    if ip and not _is_pure_loopback_ip(ip):
+                        result.add(ip)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        return result
+
+    # 方式2：传统 getaddrinfo / 8.8.8.8 探测 —— 严格设置短超时，最坏 1.5s 放弃
+    def _collect_via_dns():
+        result = set()
+        try:
+            hostname = socket.gethostname()
+            try:
+                old = socket.getdefaulttimeout()
+                socket.setdefaulttimeout(1.0)
+                try:
+                    addr_info = socket.getaddrinfo(hostname, None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
+                finally:
+                    socket.setdefaulttimeout(old)
+                for info in addr_info:
+                    ip = info[4][0].split("%")[0]
+                    if ip and not _is_pure_loopback_ip(ip):
+                        result.add(ip)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        for probe_host, probe_port in (("8.8.8.8", 80), ("1.0.0.1", 53), ("223.5.5.5", 53)):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(0.6)
+                s.connect((probe_host, probe_port))
+                ip = s.getsockname()[0]
+                s.close()
+                if ip and not _is_pure_loopback_ip(ip):
+                    result.add(ip)
+                    break
+            except Exception:
+                continue
+        return result
+
     try:
-        hostname = socket.gethostname()
-        try:
-            addr_info = socket.getaddrinfo(hostname, None)
-            for info in addr_info:
-                ip = info[4][0]
-                if not _is_pure_loopback_ip(ip):
-                    ips.add(ip)
-        except Exception:
-            pass
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-            if local_ip and not _is_pure_loopback_ip(local_ip):
-                ips.add(local_ip)
-        except Exception:
-            pass
+        ips.update(_collect_via_bind())
     except Exception:
         pass
+
+    # 若绑定法已得到多个地址（通常 ≥1 ）则直接接受，避免再触发 DNS/外网探测的卡顿
+    if len(ips) == 0:
+        try:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(_collect_via_dns)
+                try:
+                    extra = fut.result(timeout=1.6)
+                    ips.update(extra or set())
+                except concurrent.futures.TimeoutError:
+                    pass
+        except Exception:
+            pass
+
     with _LOCAL_IPS_LOCK:
         _LOCAL_IPS = ips
     return ips
@@ -1105,6 +1458,10 @@ def _is_static_asset():
     for prefix in static_prefixes:
         if path.startswith(prefix):
             return True
+    # 标题图：本地图片通过 /nav_icon 路由提供。
+    # 不放进白名单的话，浏览器首次访问时标题图会被安全校验拦下，标题栏会缺图。
+    if path == "/nav_icon":
+        return True
     if path in ("/favicon.ico", "/robots.txt", "/sitemap.xml"):
         return True
     return False
@@ -1127,27 +1484,68 @@ def _generate_challenge_token(identity):
     sig = hmac.new(secret, raw, hashlib.sha256).hexdigest()
     return f"{timestamp}.{random_nonce}.{sig}"
 
-def _verify_challenge_token(token, identity):
+def _challenge_token_status(token, identity):
+    """校验挑战令牌，返回 "ok" / "expired" / "invalid"。
+
+    区分「过期」与「伪造」很重要：低配设备求解可能超过令牌有效期，
+    此时若一律当作无效并重新下发令牌，就会陷入"永远算不完"的循环。
+    """
     try:
         parts = token.split(".")
         if len(parts) != 3:
-            return False
+            return "invalid"
         timestamp_str, nonce, sig = parts
         timestamp = int(timestamp_str)
-        if time.time() - timestamp > CHALLENGE_TOKEN_TTL:
-            return False
         secret = app.secret_key.encode() if app.secret_key else b"default_secret"
         raw = f"{identity}:{timestamp_str}:{nonce}".encode()
         expected = hmac.new(secret, raw, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(sig, expected)
+        if not hmac.compare_digest(sig, expected):
+            return "invalid"
+        if time.time() - timestamp > CHALLENGE_TOKEN_TTL:
+            return "expired"
+        return "ok"
     except Exception:
-        return False
+        return "invalid"
+
+def _verify_challenge_token(token, identity):
+    return _challenge_token_status(token, identity) == "ok"
+
+def _browser_fingerprint():
+    """生成稳定的浏览器指纹。
+
+    不能把完整 User-Agent 绑定进 cookie：浏览器扩展、隐私插件、内置浏览器
+    会在不同请求间改写 UA，导致刚验证通过的 cookie 立刻失效，
+    表现为"验证成功 -> 立刻又被拦 -> 再验证"的无限循环。
+    这里只取跟浏览器主体相关的关键特征，忽略版本号、附加标记等易变部分。
+    """
+    ua = request.headers.get("User-Agent", "")
+    # 提取浏览器家族与主版本（如 Chrome/120），忽略小版本与附加后缀
+    family = ""
+    for token, name in (
+        ("Edg/", "edge"), ("OPR/", "opera"), ("Chrome/", "chrome"),
+        ("Firefox/", "firefox"), ("Safari/", "safari"),
+    ):
+        if token in ua:
+            family = name
+            break
+    # 平台
+    platform = ""
+    for token, name in (
+        ("Windows", "win"), ("Macintosh", "mac"), ("Android", "android"),
+        ("iPhone", "ios"), ("iPad", "ipados"), ("Linux", "linux"),
+    ):
+        if token in ua:
+            platform = name
+            break
+    accept_lang = request.headers.get("Accept-Language", "")[:40]
+    return f"{family}|{platform}|{accept_lang}"
+
 
 def _generate_verify_cookie(identity):
     secret = app.secret_key.encode() if app.secret_key else b"default_secret"
     expire_ts = int(time.time()) + CHALLENGE_EXPIRE
-    ua = request.headers.get("User-Agent", "")[:200]
-    raw = f"{identity}:{expire_ts}:{ua}".encode()
+    fp = _browser_fingerprint()
+    raw = f"{identity}:{expire_ts}:{fp}".encode()
     sig = hmac.new(secret, raw, hashlib.sha256).hexdigest()
     return f"{expire_ts}.{sig}"
 
@@ -1158,10 +1556,22 @@ def _verify_cookie(cookie_val, identity):
         if time.time() > expire_ts:
             return False
         secret = app.secret_key.encode() if app.secret_key else b"default_secret"
-        ua = request.headers.get("User-Agent", "")[:200]
-        raw = f"{identity}:{expire_ts_str}:{ua}".encode()
+        fp = _browser_fingerprint()
+        raw = f"{identity}:{expire_ts_str}:{fp}".encode()
         expected = hmac.new(secret, raw, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(sig, expected)
+        if hmac.compare_digest(sig, expected):
+            return True
+        # 指纹发生轻微漂移（扩展改写 UA、版本升级等）时，回退到更宽松的校验：
+        # 只要身份（IP）与过期时间都没问题，就仍然放行，
+        # 避免用户被反复要求验证。
+        legacy_raw = f"{identity}:{expire_ts_str}:{request.headers.get('User-Agent','')[:200]}".encode()
+        if hmac.compare_digest(sig, hmac.new(secret, legacy_raw, hashlib.sha256).hexdigest()):
+            return True
+        # 仅校验身份 + 过期时间（不含 UA），签名仍不可伪造
+        base_raw = f"{identity}:{expire_ts_str}".encode()
+        if hmac.compare_digest(sig, hmac.new(secret, base_raw, hashlib.sha256).hexdigest()):
+            return True
+        return False
     except Exception:
         return False
 
@@ -1173,23 +1583,106 @@ def _render_js_challenge(token, next_url):
         next_url=next_url,
         verify_path=VERIFY_PATH)
 
+def _safe_relative_url(path):
+    """把任意路径规范化为安全的站内相对路径。
+
+    浏览器把反斜杠视作正斜杠，所以 "/\\chat" 必须先转成 "/chat" 再做判断，
+    否则反斜杠会被误判为危险字符、整条路径被丢弃，用户就回不到目标页面。
+    返回 (规范化后的路径, 是否被修改过)。
+    """
+    if not path:
+        return "/", False
+    original = path
+    # 浏览器把 \ 当 / 处理，先归一，避免把 /chat 这类正常路径误杀
+    path = path.replace("\\", "/")
+    # 折叠重复斜杠
+    while "//" in path:
+        path = path.replace("//", "/")
+    # 去掉控制字符与首尾空白
+    path = "".join(ch for ch in path if ord(ch) >= 32 or ch == "\t").strip()
+    if not path:
+        return "/", True
+    # 必须以 / 开头（防止 "evil.com/x" 被当作相对路径）
+    if not path.startswith("/"):
+        path = "/" + path
+    # 解析 .. 与 .，防止路径穿越
+    try:
+        parsed = urllib.parse.urlparse(path)
+        segments = []
+        for seg in parsed.path.split("/"):
+            if seg in ("", "."):
+                continue
+            if seg == "..":
+                if segments:
+                    segments.pop()
+                continue
+            segments.append(seg)
+        normalized = "/" + "/".join(segments)
+        if parsed.query:
+            normalized += "?" + parsed.query
+        path = normalized
+    except Exception:
+        path = "/"
+    return path, (path != original)
+
+
+def _is_external_url(raw):
+    """判断是否为站外地址（含协议相对与反斜杠伪装）。"""
+    if not raw:
+        return False
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme:
+        return True
+    if parsed.netloc:
+        return True
+    # 协议相对：//evil.com
+    if raw.startswith("//"):
+        return True
+    # 反斜杠伪装：\\evil.com  ->  //evil.com
+    if raw.startswith("\\\\"):
+        return True
+    return False
+
+
 def _validate_next_url(url):
-    """Validate next URL to prevent open redirect attacks."""
+    """校验跳转目标，防止开放重定向。
+
+    与旧实现的关键区别：反斜杠等可修正的写法会被**规范化**而不是直接丢弃，
+    这样用户验证通过后能回到原本要访问的页面，不会出现反复验证的死循环。
+    """
     if not url:
         return "/"
-    # Reject backslash (browser interprets as forward slash)
-    if "\\" in url:
+    raw = url.strip()
+    if not raw:
         return "/"
-    # Allow only relative paths or safe http(s) URLs
-    parsed = urllib.parse.urlparse(url)
+
+    parsed = urllib.parse.urlparse(raw)
+
     if parsed.scheme in ("http", "https"):
-        # Safe absolute URL
-        return url
-    if parsed.scheme == "" and parsed.netloc == "":
-        # Relative path - must start with / and not be //
-        if url.startswith("/") and not url.startswith("//"):
-            return url
-    return "/"
+        # 绝对地址：仅当指向本站时才接受，否则回到首页
+        try:
+            host = request.host.split(":")[0].lower() if request else ""
+            target_host = (parsed.hostname or "").lower()
+            if host and target_host == host:
+                path = parsed.path or "/"
+                if parsed.query:
+                    path += "?" + parsed.query
+                safe, _ = _safe_relative_url(path)
+                return safe
+        except Exception:
+            pass
+        return "/"
+
+    if parsed.scheme or parsed.netloc:
+        # 其它协议（javascript:、data: 等）或已带主机名，一律拒绝
+        return "/"
+
+    if _is_external_url(raw):
+        return "/"
+
+    # 到这里是站内相对路径（可能含反斜杠），交给规范化处理
+    safe, _ = _safe_relative_url(raw)
+    return safe
 
 @app.route(VERIFY_PATH, methods=["GET", "POST"])
 def waf_verify():
@@ -1199,8 +1692,22 @@ def waf_verify():
         token = request.form.get("token", "")
         nonce_str = request.form.get("nonce", "0")
         next_url = _validate_next_url(request.args.get("next", "/"))
-        if not _verify_challenge_token(token, identity):
+        status = _challenge_token_status(token, identity)
+        if status == "invalid":
+            # 令牌被篡改，重新下发
             return _challenge_response(identity, next_url), 403
+        if status == "expired":
+            # 令牌仅是超时（低配设备算得慢），只要答案正确依然放行，
+            # 避免"算完就过期 -> 重新下发 -> 再算再过期"的死循环
+            try:
+                nonce = int(nonce_str)
+            except (ValueError, TypeError):
+                return _challenge_response(identity, next_url), 403
+            h = hashlib.sha256(f"{token}:{nonce}".encode()).hexdigest()
+            if h[:JS_CHALLENGE_DIFFICULTY] != "0" * JS_CHALLENGE_DIFFICULTY:
+                # 答案不对且令牌已过期，下发新令牌重新开始
+                return _challenge_response(identity, next_url), 403
+            return _finish_waf_verification(identity, token, next_url)
         try:
             nonce = int(nonce_str)
         except (ValueError, TypeError):
@@ -1211,30 +1718,44 @@ def waf_verify():
         if h[:JS_CHALLENGE_DIFFICULTY] == target:
             with _used_tokens_lock:
                 if token in _used_tokens:
+                    # 同一令牌重复提交（多策略竞态）：若已在本机验证过，直接放行
+                    with _waf_verified_ips_lock:
+                        _still_ok = identity in _waf_verified_ips
+                    if _still_ok:
+                        return _finish_waf_verification(identity, token, next_url)
                     return _challenge_response(identity, next_url), 403
                 _used_tokens.add(token)
-            if len(_used_tokens) > MAX_USED_TOKENS:
-                _cleanup_used_tokens()
-            with _waf_verified_ips_lock:
-                _waf_verified_ips.add(identity)
-            with _waf_challenge_lock:
-                _waf_challenge_ips.pop(identity, None)
-            cookie_val = _generate_verify_cookie(identity)
-            resp = make_response("")
-            resp.status_code = 200
-            resp.set_cookie(
-                CHALLENGE_COOKIE, cookie_val,
-                max_age=CHALLENGE_EXPIRE,
-                httponly=True,
-                secure=HTTPS_ENABLED,
-                samesite="Lax",
-                path="/"
-            )
-            resp.headers["Content-Type"] = "text/html; charset=utf-8"
-            resp.data = f'''<html><head><meta charset="utf-8"><script>window.location.href={json.dumps(next_url)};</script></head><body>验证通过，正在跳转...</body></html>'''
-            return resp
+            return _finish_waf_verification(identity, token, next_url)
     next_url = _validate_next_url(request.args.get("next", "/"))
     return _challenge_response(identity, next_url), 403
+
+
+def _finish_waf_verification(identity, token, next_url):
+    """标记身份已通过验证，写入 cookie 并返回跳转页。"""
+    if len(_used_tokens) > MAX_USED_TOKENS:
+        _cleanup_used_tokens()
+    with _waf_verified_ips_lock:
+        _waf_verified_ips[identity] = time.time() + WAF_VERIFIED_TTL
+    with _waf_challenge_lock:
+        _waf_challenge_ips.pop(identity, None)
+    cookie_val = _generate_verify_cookie(identity)
+    resp = make_response("")
+    resp.status_code = 200
+    resp.set_cookie(
+        CHALLENGE_COOKIE, cookie_val,
+        max_age=CHALLENGE_EXPIRE,
+        httponly=True,
+        secure=HTTPS_ENABLED,
+        samesite="Lax",
+        path="/"
+    )
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.data = (
+        '<html><head><meta charset="utf-8">'
+        f'<script>window.location.replace({json.dumps(next_url)});</script>'
+        '</head><body>验证通过，正在跳转...</body></html>'
+    )
+    return resp
 
 def _challenge_response(identity, next_url="/"):
     token = _generate_challenge_token(identity)
@@ -1301,18 +1822,16 @@ def waf_middleware():
             return jsonify({"code": 429, "msg": "请求过于频繁，请稍后再试"}), 429
         return "Too Many Requests", 429
     current_url = request.full_path if request.query_string else request.path
-    # Normalize path to prevent path traversal reflection
+    # 规范化访问路径，避免把非法字符反射进挑战页导致验证后跳转异常
     try:
         parsed_path = urllib.parse.urlparse(current_url)
-        normalized_path = os.path.normpath(parsed_path.path)
-        if normalized_path.startswith(".."):
-            normalized_path = "/"
+        normalized_path, _ = _safe_relative_url(parsed_path.path)
         current_url = normalized_path
         if parsed_path.query:
             current_url += "?" + parsed_path.query
     except Exception:
-        pass
-    next_url = current_url if request.method == "GET" else "/"
+        current_url = "/"
+    next_url = _validate_next_url(current_url) if request.method == "GET" else "/"
     with _waf_challenge_lock:
         _waf_challenge_ips[identity] = time.time()
         global _waf_total_challenges
@@ -1367,6 +1886,41 @@ def log_access(response):
 
 # ===================== 全局配置 =====================
 SHARE_FOLDER = os.path.abspath(CONFIG["share_dir"])
+
+def _resolve_virtual_dirs(raw):
+    """把配置中的虚拟目录解析为 {显示名: 绝对物理路径}。
+
+    虚拟目录可以指向共享目录之外的任意位置——这本来就是它的卖点
+    （给别处的文件夹起别名挂进来）。因此这里只校验别名的合法性，
+    不再限制路径位置。
+
+    安全性说明：越界风险由访问侧兜底。get_safe_path 会以该别名映射的
+    物理路径作为边界，访客无法再用 .. 或绝对路径跳出这个目录。
+    """
+    out = {}
+    share_abs = os.path.abspath(SHARE_FOLDER)
+    for name, path in (raw or {}).items():
+        name = str(name).strip()
+        path = str(path).strip()
+        if not name or not path or "/" in name or "\\" in name or name in (".", ".."):
+            logging.warning(f"忽略非法虚拟目录名: {name!r}")
+            continue
+        p = path if os.path.isabs(path) else os.path.join(share_abs, path)
+        pabs = os.path.abspath(p)
+        # 指向共享目录自身会造成列表循环，跳过；其它位置一律允许
+        if pabs == share_abs:
+            logging.warning(f"忽略虚拟目录 {name}：不能指向共享目录本身")
+            continue
+        if not os.path.isdir(pabs):
+            logging.warning(f"虚拟目录 {name} 的目标不存在，将显示为空: {pabs}")
+        out[name] = pabs
+    return out
+
+VIRTUAL_DIRS = _resolve_virtual_dirs(CONFIG.get("virtual_dirs"))
+HIDDEN_FOLDERS = set(CONFIG.get("hidden_folders") or set())
+# 显示别名：列表中展示的名字（不改动磁盘真实名称）
+DISPLAY_NAMES = dict(CONFIG.get("display_names") or {})
+
 SERVER_PORT = CONFIG["port"]
 HOME_TITLE = CONFIG["title"]
 SERVER_HOST = CONFIG["host"]
@@ -1381,7 +1935,10 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_SIZE
 
 _chat_cfg = CONFIG.get("chat", {})
 MAX_CHAT_MESSAGES = _chat_cfg.get("max_messages", 500)
-CHAT_ROOM_TIMEOUT = _chat_cfg.get("room_timeout_hours", 24) * 3600 * 1000
+# 房间空闲多久后回收。配置项单位是小时，而 last_activity 用 time.time()（秒），
+# 因此只需 *3600。这里曾经多乘了一个 1000，导致 24 小时被放大成 1000 天，
+# 房间实际上永远不会被清理（实测 34 天前的房间仍留在库里）。
+CHAT_ROOM_TIMEOUT = _chat_cfg.get("room_timeout_hours", 24) * 3600
 CHAT_MESSAGE_RATE = _chat_cfg.get("message_rate", 5)
 CHAT_MESSAGE_RATE_WINDOW = _chat_cfg.get("message_rate_window", 60)
 HTTP_CHAT_TIMEOUT = _chat_cfg.get("http_timeout", 60)
@@ -1391,11 +1948,15 @@ CHAT_CREATE_RATE_WINDOW = _chat_cfg.get("create_rate_window", 60)
 # Update session cookie security based on config
 app.config['SESSION_COOKIE_SECURE'] = HTTPS_ENABLED
 
-peers = {}
+peers = {}           # uid -> {"addr","online","room","nick","ua"}
 peer_lock = Lock()
 temp_files = {}
 file_lock = Lock()
 signal_box = {}
+
+# 房间（面对面联机分组）：room_code -> set(uid)，用于双方仅看到同房间的成员
+rooms = defaultdict(set)
+rooms_lock = Lock()
 
 # ===================== 公钥 PEM 文件支持 =====================
 _public_key_cache = None
@@ -1458,68 +2019,85 @@ def verify_with_public_key(signature, message, key_type=None):
         logger.warning(f"公钥验证失败: {e}")
         return False
 
-# ===================== 数据持久化 =====================
+# ===================== 数据持久化（SQLite） =====================
+DB_PATH = os.path.join(DATA_DIR, "app.db")
+
+def init_storage():
+    """初始化 SQLite 存储，并在首次运行时从旧的 JSON 数据迁移。"""
+    try:
+        storage.init(DB_PATH)
+        chat_n, temp_n, migrated = storage.migrate_from_json(
+            CHAT_DATA, TEMP_FILES_DATA, DB_PATH
+        )
+        if migrated:
+            logger.info(f"已从 JSON 迁移数据到数据库: {chat_n} 个聊天室, {temp_n} 个临时文件")
+        logger.info(f"存储已就绪: {DB_PATH}")
+    except Exception as e:
+        logger.error(f"初始化存储失败: {e}")
+
 def load_temp_files():
     global temp_files
-    if os.path.exists(TEMP_FILES_DATA):
-        try:
-            with open(TEMP_FILES_DATA, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            with file_lock:
-                for fid, info in saved.items():
-                    if os.path.exists(info["path"]):
-                        temp_files[fid] = info
-            logger.info(f"已加载 {len(temp_files)} 个临时文件")
-        except Exception as e:
-            logger.warning(f"加载临时文件数据失败: {e}")
+    try:
+        saved = storage.load_temp()
+    except Exception as e:
+        logger.warning(f"加载临时文件数据失败: {e}")
+        return
+    with file_lock:
+        for fid, info in saved.items():
+            if info.get("path") and os.path.exists(info["path"]):
+                temp_files[fid] = info
+    logger.info(f"已加载 {len(temp_files)} 个临时文件")
 
 def save_temp_files():
     try:
         with file_lock:
             data = dict(temp_files)
-        with open(TEMP_FILES_DATA + ".tmp", "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(TEMP_FILES_DATA + ".tmp", TEMP_FILES_DATA)
+        storage.save_temp(data)
     except Exception as e:
         logger.warning(f"保存临时文件数据失败: {e}")
 
 def load_chat_data():
     global chat_rooms
-    if os.path.exists(CHAT_DATA):
-        try:
-            with open(CHAT_DATA, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            with chat_lock:
-                for rid, room in saved.items():
-                    room["messages"] = deque(room["messages"], maxlen=MAX_CHAT_MESSAGES)
-                    room["users"] = set(room.get("users", []))
-                    chat_rooms[rid] = room
-            logger.info(f"已加载 {len(chat_rooms)} 个聊天室")
-        except Exception as e:
-            logger.warning(f"加载聊天室数据失败: {e}")
+    try:
+        saved = storage.load_chat()
+    except Exception as e:
+        logger.warning(f"加载聊天室数据失败: {e}")
+        return
+    with chat_lock:
+        for rid, room in saved.items():
+            room["messages"] = deque(room["messages"], maxlen=MAX_CHAT_MESSAGES)
+            room["users"] = set(room.get("users", []))
+            chat_rooms[rid] = room
+    logger.info(f"已加载 {len(chat_rooms)} 个聊天室")
 
 def save_chat_data():
+    """把内存中的房间数据落盘。
+
+    加一把专用锁串行化"快照 + 写盘"整个动作：原来是各线程各自拍快照后
+    并行写同一个文件，两个线程交错时后写的会覆盖先写的，造成丢消息。
+    """
     try:
-        with chat_lock:
-            data = {}
-            for rid, room in chat_rooms.items():
-                data[rid] = {
-                    "name": room["name"],
-                    "password_hash": room["password_hash"],
-                    "created": room["created"],
-                    "last_activity": room["last_activity"],
-                    "messages": list(room["messages"]),
-                    "users": list(room["users"])
-                }
-        with open(CHAT_DATA + ".tmp", "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(CHAT_DATA + ".tmp", CHAT_DATA)
+        with _chat_save_lock:
+            with chat_lock:
+                data = {}
+                for rid, room in chat_rooms.items():
+                    data[rid] = {
+                        "name": room["name"],
+                        "password_hash": room["password_hash"],
+                        "created": room["created"],
+                        "last_activity": room["last_activity"],
+                        "messages": list(room["messages"]),
+                        "users": list(room["users"])
+                    }
+            storage.save_chat(data)
     except Exception as e:
         logger.warning(f"保存聊天室数据失败: {e}")
 
 # ===================== 聊天室数据结构 =====================
 chat_rooms = {}
 chat_lock = Lock()
+# save_chat_data 专用的写盘锁，避免多线程同时落盘互相覆盖
+_chat_save_lock = Lock()
 
 ws_rooms = {}
 ws_rooms_lock = Lock()
@@ -1663,6 +2241,67 @@ chat_bbcode_parser.add_formatter('img', fmt_img)
 chat_bbcode_parser.add_formatter('file', fmt_file)
 chat_bbcode_parser.add_formatter('font', fmt_font)
 
+BARE_URL_RE = re.compile(r'(?<![\w"\'/=.?#-])(https?://[^\s<>"\']+)', re.IGNORECASE)
+_TAG_SPLIT_RE = re.compile(r'(<[^>]*>)')
+TRAILING_URL_JUNK = '.,;:!?)]}\u3002\uff0c\uff01\uff1f\uff09\u300b\u3011\u201d\u2019'
+
+def _autolink_text_segment(segment):
+    """把一个纯文本片段中的裸 URL 转换为 <a> 标签。
+
+    仅处理不在 HTML 标签内的文本，已在 <a> 内的内容不会被重复处理
+    （调用方通过标签切分保证这一点）。
+
+    注意：传入的 segment 已经是 HTML 转义后的文本（bbcode 解析输出），
+    因此这里不能再做整串转义，仅在写入属性值时转义引号。
+    """
+    if 'http://' not in segment and 'https://' not in segment:
+        return segment
+
+    def _repl(match):
+        raw = match.group(1)
+        trail = ''
+        while raw and raw[-1] in TRAILING_URL_JUNK:
+            trail = raw[-1] + trail
+            raw = raw[:-1]
+        if not raw:
+            return match.group(0)
+        # 属性值与显示文本都直接复用已转义的原文，仅补足属性引号转义
+        attr = raw.replace('"', '&quot;').replace("'", '&#39;')
+        if not re.match(r'^https?://', raw, re.IGNORECASE):
+            return match.group(0)
+        return f'<a href="{attr}" target="_blank" rel="noopener noreferrer">{raw}</a>{trail}'
+
+    return BARE_URL_RE.sub(_repl, segment)
+
+def autolink_html(html_text):
+    """在已生成的 HTML 中，为裸 URL 文本自动添加链接。
+
+    通过标签切分，只对标签外的文本节点做替换，避免破坏属性值，
+    也避免在已有的 <a> 内部再次嵌套链接。
+    """
+    if not html_text:
+        return html_text
+    parts = _TAG_SPLIT_RE.split(html_text)
+    out = []
+    anchor_depth = 0
+    for part in parts:
+        if not part:
+            continue
+        if part.startswith('<') and part.endswith('>'):
+            tag = part[1:].split()[0].lower().rstrip('/') if len(part) > 2 else ''
+            if tag == 'a':
+                if part[1:2] == '/':
+                    anchor_depth = max(0, anchor_depth - 1)
+                elif not part.endswith('/>'):
+                    anchor_depth += 1
+            out.append(part)
+        else:
+            if anchor_depth > 0:
+                out.append(part)
+            else:
+                out.append(_autolink_text_segment(part))
+    return ''.join(out)
+
 def sanitize_bbcode(text):
     if not text:
         return ""
@@ -1670,18 +2309,40 @@ def sanitize_bbcode(text):
         parsed = chat_bbcode_parser.format(text)
     except Exception:
         parsed = _html_escape(text)
+    try:
+        parsed = autolink_html(parsed)
+    except Exception:
+        pass
     parsed = parsed.replace('\n', '<br>')
     return parsed
 
 def clean_expired_rooms():
+    """回收超时房间。
+
+    锁内只做"挑出并摘除"，真正耗时的部分（关掉该房间的 WebSocket 连接、
+    写盘）都放到锁外。原来整个流程都在 chat_lock 里跑，房间一大就会把
+    所有发消息的请求一起卡住。
+    """
     now = time.time()
-    expired = []
     with chat_lock:
-        for rid, room in chat_rooms.items():
-            if now - room["last_activity"] > CHAT_ROOM_TIMEOUT:
-                expired.append(rid)
-        for rid in expired:
-            chat_rooms.pop(rid, None)
+        expired = [rid for rid, room in chat_rooms.items()
+                   if now - room.get("last_activity", 0) > CHAT_ROOM_TIMEOUT]
+        removed = [chat_rooms.pop(rid, None) for rid in expired]
+    removed = [r for r in removed if r]
+    if not removed:
+        return
+    # 回收属于已关闭房间的 WebSocket 连接，避免连接对象悬挂、越积越多
+    for rid in expired:
+        try:
+            with ws_rooms_lock:
+                conns = list(ws_rooms.pop(rid, set()) or [])
+            for ws in conns:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"回收房间 {rid} 的连接失败: {e}")
 
 def get_nickname():
     data = request.get_json(silent=True) or {}
@@ -1711,18 +2372,26 @@ def format_mtime(mtime):
     return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
 
 def clean_expired_files():
+    """清理过期临时文件。
+
+    先锁内摘除记录，再在锁外删磁盘文件——os.remove 可能因为磁盘慢而阻塞，
+    持锁删会让所有上传/下载请求排队等待。
+    """
     now = time.time()
-    expired = []
     with file_lock:
-        for fid, info in temp_files.items():
-            if now - info["upload_time"] > FILE_EXPIRE:
-                expired.append(fid)
-        for fid in expired:
-            try:
-                os.remove(temp_files[fid]["path"])
-            except Exception:
-                pass
+        expired = [(fid, info.get("path")) for fid, info in temp_files.items()
+                   if now - info.get("upload_time", 0) > FILE_EXPIRE]
+        for fid, _p in expired:
             temp_files.pop(fid, None)
+    for fid, path in expired:
+        if not path:
+            continue
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning(f"删除过期文件 {fid} 失败: {e}")
 
 def get_safe_path(relative_path):
     # 剔除路由前缀 /files/
@@ -1734,16 +2403,35 @@ def get_safe_path(relative_path):
     # 空路径返回根共享目录
     if not rel.strip("/"):
         return SHARE_FOLDER
-    # 禁止访问以 . 开头的隐藏文件/目录，禁止..穿越
-    parts = re.split(r'[\\/]+', rel)
+    # 禁止访问以 . 开头的隐藏文件/目录
+    parts = rel.split(os.sep)
     for part in parts:
-        if part.startswith('.') or '..' in part:
+        if part.startswith('.'):
             abort(403)
-    target_path = os.path.abspath(os.path.join(SHARE_FOLDER, rel))
-    # 严格前缀校验
-    share_abs = os.path.abspath(SHARE_FOLDER)
+
+    # 虚拟目录：若首段是已配置的别名，则把基址切换为该别名映射的物理路径
+    base = SHARE_FOLDER
+    rel_norm = rel.replace("\\", "/").strip("/")
+    first_seg = rel_norm.split("/", 1)[0] if rel_norm else ""
+    rest = rel_norm[len(first_seg):].lstrip("/")
+    if first_seg in VIRTUAL_DIRS:
+        base = VIRTUAL_DIRS[first_seg]
+        rel = rest
+        if not rel.strip("/"):
+            return base
+        for part in rel.split("/"):
+            if part.startswith('.'):
+                abort(403)
+
+    # 安全拼接，禁止..穿越
+    rel = os.path.normpath(rel)
+    if rel.startswith("..") or os.path.isabs(rel):
+        abort(403)
+    target_path = os.path.abspath(os.path.join(base, rel))
+    # 严格前缀校验（相对虚拟目录基址或共享目录）
+    base_abs = os.path.abspath(base)
     try:
-        if os.path.commonpath([target_path, share_abs]) != share_abs:
+        if os.path.commonpath([target_path, base_abs]) != base_abs:
             abort(403)
     except ValueError:
         abort(403)
@@ -1752,13 +2440,63 @@ def get_safe_path(relative_path):
 def cleanup_expired_peers():
     now = time.time()
     expired = []
-    with peer_lock:
+    with peer_lock, rooms_lock:
         for uid, info in peers.items():
             if now - info["online"] > PEER_TIMEOUT:
                 expired.append(uid)
         for uid in expired:
-            peers.pop(uid, None)
+            info = peers.pop(uid, None)
             signal_box.pop(uid, None)
+            if info and info.get("room"):
+                room = info["room"]
+                if room in rooms:
+                    rooms[room].discard(uid)
+                    if not rooms[room]:
+                        rooms.pop(room, None)
+
+
+def _get_p2p_uid(create_if_missing: bool = True):
+    """获取或创建客户端唯一标识。优先 session 存储；回退到 query/header 参数；
+    避免 cookie 被 RadminLAN/浏览器策略拦截时每次请求都生成新 ID 导致"看到的只有自己"。
+    """
+    uid = session.get("p2p_uid")
+    if uid:
+        return uid
+    # 兼容客户端显式带 uid 的回退路径
+    uid = request.args.get("p2p_uid") or request.headers.get("X-P2P-UID")
+    if uid and len(uid) <= 64 and all(c.isalnum() or c in "-_" for c in uid):
+        if create_if_missing:
+            try:
+                session["p2p_uid"] = uid
+            except Exception:
+                pass
+        return uid
+    if create_if_missing:
+        uid = uuid.uuid4().hex
+        try:
+            session["p2p_uid"] = uid
+        except Exception:
+            pass
+        return uid
+    return None
+
+
+def _safe_room_code(raw):
+    if not raw:
+        return ""
+    code = str(raw).strip().upper()
+    code = "".join(c for c in code if c.isalnum() or c in "-_")[:16]
+    return code
+
+
+def _remove_peer_from_rooms(uid: str):
+    with rooms_lock:
+        for room_code, members in list(rooms.items()):
+            if uid in members:
+                members.discard(uid)
+                if not members:
+                    rooms.pop(room_code, None)
+
 
 # ===================== 路由（完全保留原有功能） =====================
 @app.route("/live2d/<path:filename>")
@@ -1769,52 +2507,239 @@ def live2d_static(filename):
 def emoticons(filename):
     return send_from_directory(os.path.join(STATIC_FOLDER, 'emoticons'), filename)
 
+
+# ===================== 标题图 =====================
+
+# 允许作为标题图的图片扩展名
+NAV_ICON_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".svg"}
+# 标题图文件大小上限（2MB）——标题图不该很大，超大文件大多是用错了
+NAV_ICON_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _nav_icon_token(path):
+    """为某个本地图片路径生成签名。
+
+    为什么要签名：本地自定义标题图位于静态目录之外，必须开一个路由把它读出来。
+    如果路由直接接受任意路径，那就成了"任意文件读取"漏洞——任何人都能拿
+    这个接口去读服务器上的任意文件。这里用启动时生成的站点密钥签名，
+    只有「用户自己在设置里填过的路径」才会被签名，路由端校验签名后才返回内容。
+    """
+    secret = _get_site_secret()
+    if isinstance(secret, str):
+        secret = secret.encode("utf-8")
+    mac = hmac.new(secret, os.path.abspath(path).encode("utf-8"), hashlib.sha256)
+    return mac.hexdigest()[:32]
+
+
+def nav_icon_url(value):
+    """把配置里的标题图路径解析成浏览器可访问的 URL。
+
+    只接受本地图片路径，如 "D:\\\\我的图\\\\home.png" 或 "/home/me/logo.png"。
+    返回空字符串表示"不换图"（继续显示原来的符号与文字）。
+    """
+    value = (value or "").strip()
+    if not value:
+        return ""
+
+    looks_like_path = (
+        os.path.isabs(value)
+        or (len(value) > 2 and value[1] == ":" and value[2] in ("\\", "/"))
+    )
+    if looks_like_path:
+        ext = os.path.splitext(value)[1].lower()
+        if ext not in NAV_ICON_EXTENSIONS:
+            return ""
+        if not os.path.isfile(value):
+            return ""
+        try:
+            if os.path.getsize(value) > NAV_ICON_MAX_BYTES:
+                return ""
+        except OSError:
+            return ""
+        return f"/nav_icon?p={_nav_icon_token(value)}&v={int(os.path.getmtime(value))}"
+
+    return ""
+
+
+def get_nav_titles():
+    """返回 {页面标识: 标题图URL}。
+
+    标题图片要替代整块标题，必须是用户自己准备的图；签名与大小限制逻辑
+    由 nav_icon_url 统一处理。
+    """
+    configured = CONFIG.get("nav_titles") or {}
+    out = {}
+    for page in NAV_ICON_PAGES:
+        url = nav_icon_url(configured.get(page, ""))
+        if url:
+            out[page] = url
+    return out
+
+
+def _configured_local_images():
+    """收集配置里所有登记过的本地标题图路径。
+
+    签名路由只认这些路径。若某类图片没被收集进来，对应图片就会取到 404——
+    标题图曾经就因为这个漏掉而显示不出来。
+    """
+    paths = []
+    for key in ("nav_titles",):
+        for value in (CONFIG.get(key) or {}).values():
+            value = (value or "").strip()
+            if not value:
+                continue
+            if os.path.isabs(value) or (
+                len(value) > 2 and value[1] == ":" and value[2] in ("\\", "/")
+            ):
+                paths.append(value)
+    return paths
+
+
+@app.route("/nav_icon")
+def nav_icon():
+    """按签名提供本地标题图。
+
+    只认签名，不认路径——请求里根本没有路径参数，所以无法用它去读别的文件。
+    """
+    token = (request.args.get("p") or "").strip()
+    if not token:
+        abort(404)
+
+    for value in _configured_local_images():
+        if hmac.compare_digest(_nav_icon_token(value), token):
+            directory = os.path.dirname(os.path.abspath(value))
+            filename = os.path.basename(value)
+            if not os.path.isfile(os.path.join(directory, filename)):
+                abort(404)
+            resp = make_response(send_from_directory(directory, filename))
+            # 图片基本不变，加上长缓存；换图时 URL 里的 v= 会变，浏览器自然会重新取
+            resp.headers["Cache-Control"] = "public, max-age=86400"
+            return resp
+
+    abort(404)
+
+
 @app.route("/p2p/join")
 def p2p_join():
     clean_expired_files()
     cleanup_expired_peers()
-    uid = session.get("p2p_uid", uuid.uuid4().hex)
-    session["p2p_uid"] = uid
-    addr = request.remote_addr
+
+    uid = _get_p2p_uid(create_if_missing=True)
+    addr = request.remote_addr or "unknown"
+    ua = request.headers.get("User-Agent", "")[:120]
+    nick = request.args.get("nick", "").strip()[:32]
+    room = _safe_room_code(request.args.get("room", ""))
+
     with peer_lock:
-        peers[uid] = {"addr": addr, "online": time.time()}
-    return jsonify({"code":0,"uid":uid,"peers":list(peers.keys())})
+        old_info = peers.get(uid) or {}
+        old_room = old_info.get("room") if isinstance(old_info, dict) else None
+        info = {"addr": addr, "online": time.time(), "nick": nick or old_info.get("nick", "") or uid[:8],
+                "room": room or old_room or "", "ua": ua}
+        peers[uid] = info
+        new_room = info["room"]
+        if new_room:
+            with rooms_lock:
+                if old_room and old_room != new_room and old_room in rooms:
+                    rooms[old_room].discard(uid)
+                    if not rooms[old_room]:
+                        rooms.pop(old_room, None)
+                rooms[new_room].add(uid)
+
+    with peer_lock:
+        if room:
+            member_set = set(rooms.get(room, set()))
+            peer_list = [{"uid": u, "nick": peers[u]["nick"], "self": u == uid}
+                         for u in member_set if u in peers]
+        else:
+            peer_list = [{"uid": u, "nick": info.get("nick", u[:8]), "self": u == uid}
+                         for u, info in peers.items()]
+
+    return jsonify({"code": 0, "uid": uid, "nick": (peers.get(uid) or {}).get("nick", ""),
+                    "room": room, "peers": peer_list})
+
+
+@app.route("/p2p/leave", methods=["GET", "POST"])
+def p2p_leave():
+    uid = _get_p2p_uid(create_if_missing=False)
+    if uid:
+        with peer_lock:
+            peers.pop(uid, None)
+            signal_box.pop(uid, None)
+        _remove_peer_from_rooms(uid)
+    cleanup_expired_peers()
+    return jsonify({"code": 0})
+
+
+@app.route("/p2p/heartbeat")
+def p2p_heartbeat():
+    uid = _get_p2p_uid(create_if_missing=False)
+    if not uid:
+        return jsonify({"code": 1, "msg": "not joined"}), 404
+    addr = request.remote_addr or "unknown"
+    with peer_lock:
+        if uid in peers:
+            peers[uid]["online"] = time.time()
+            peers[uid]["addr"] = addr
+    return jsonify({"code": 0})
+
 
 @app.route("/p2p/list")
 def p2p_list():
     cleanup_expired_peers()
+    uid = _get_p2p_uid(create_if_missing=False)
+    my_info = peers.get(uid) if uid else None
+    my_room = (my_info or {}).get("room") if isinstance(my_info, dict) else None
+
     now = time.time()
-    with peer_lock:
-        online = [u for u,t in peers.items() if now - t["online"] < PEER_TIMEOUT]
-    return jsonify({"code":0,"list":online})
+    room_arg = _safe_room_code(request.args.get("room", "")) or my_room or ""
+    with peer_lock, rooms_lock:
+        if room_arg:
+            member_set = set(rooms.get(room_arg, set()))
+            online = [u for u in member_set if u in peers and now - peers[u]["online"] < PEER_TIMEOUT]
+        else:
+            online = [u for u, info in peers.items() if now - info["online"] < PEER_TIMEOUT]
+        result = [{"uid": u,
+                   "nick": peers[u].get("nick", u[:8]) if u in peers else u[:8],
+                   "self": (u == uid)}
+                  for u in online]
+    return jsonify({"code": 0, "list": result, "room": room_arg})
+
 
 @app.route("/p2p/signal/send", methods=["POST"])
 def p2p_signal_send():
     if not request.is_json:
-        return jsonify({"code":1,"msg":"请求格式错误"})
+        return jsonify({"code": 1, "msg": "请求格式错误"})
     data = request.get_json(silent=True) or {}
     to = data.get("to")
-    frm = session.get("p2p_uid")
+    frm = _get_p2p_uid(create_if_missing=False)
     if not to or not frm:
-        return jsonify({"code":1,"msg":"参数错误"})
+        return jsonify({"code": 1, "msg": "参数错误（请先加入在线）"})
     with peer_lock:
+        if frm not in peers:
+            # 未登记先自动登记一次，避免 session 丢失导致无法发信
+            peers[frm] = {"addr": request.remote_addr or "", "online": time.time(),
+                          "nick": frm[:8], "room": "", "ua": request.headers.get("User-Agent", "")[:120]}
+        peers[frm]["online"] = time.time()
         if to not in signal_box:
             signal_box[to] = []
         if len(signal_box[to]) >= MAX_SIGNAL_QUEUE:
-            return jsonify({"code":1,"msg":"信号队列已满"}), 429
+            return jsonify({"code": 1, "msg": "信号队列已满"}), 429
         data["frm"] = frm
         signal_box[to].append({"data": data, "time": time.time()})
-    return jsonify({"code":0})
+    return jsonify({"code": 0})
+
 
 @app.route("/p2p/signal/recv")
 def p2p_signal_recv():
-    uid = session.get("p2p_uid")
+    uid = _get_p2p_uid(create_if_missing=False)
     if not uid:
         return jsonify({})
+    # 顺便心跳，减少因 session 丢失/页面切后台过久被踢出
     with peer_lock:
+        if uid in peers:
+            peers[uid]["online"] = time.time()
         if uid not in signal_box or len(signal_box[uid]) == 0:
             return jsonify({})
-        # 清理过期的信号消息
         now = time.time()
         while signal_box[uid] and now - signal_box[uid][0].get("time", 0) > SIGNAL_TIMEOUT:
             signal_box[uid].pop(0)
@@ -1874,8 +2799,11 @@ def temp_download(fid):
     try:
         _log_download(client_ip, fid, uid, "success")
         return send_from_directory(UPLOAD_TEMP_FOLDER, fid, as_attachment=True, download_name=file_name)
-    except Exception:
+    except Exception as e:
+        # 文件在取完元数据到真正发送之间可能被清理线程删掉，属正常竞态；
+        # 记录一下，避免"下载 404 但日志里什么都没有"的情况。
         _log_download(client_ip, fid, uid, "file-error")
+        logger.info(f"发送临时文件 {fid} 失败: {e}")
         return "Not Found", 404
 
 @app.route("/temp/delete/<fid>", methods=["POST"])
@@ -1888,11 +2816,16 @@ def temp_delete(fid):
         owner = info.get("owner")
         if not owner or owner != session.get("p2p_uid"):
             return jsonify({"code":1,"msg":"无权操作"}), 403
-        try:
-            os.remove(info["path"])
-        except Exception:
-            pass
+        path = info.get("path")
         temp_files.pop(fid, None)
+    # 删磁盘放到锁外，避免 os.remove 卡住时把其他上传/下载请求一起堵死
+    if path:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning(f"删除临时文件 {fid} 失败: {e}")
     save_temp_files()
     return jsonify({"code":0,"msg":"删除成功"})
 
@@ -1917,6 +2850,7 @@ def transfer_page():
     return render_template("send_file.html")
 
 chat_create_limits = {}
+chat_create_limits_lock = Lock()
 
 def get_client_ip():
     if BEHIND_PROXY:
@@ -1938,16 +2872,16 @@ def chat_create():
     client_ip = get_client_ip()
     now = time.time()
 
-    if client_ip in chat_create_limits:
-        count, start_time = chat_create_limits[client_ip]
+    # 限流计数必须加锁：原来无锁读改写，多线程同时创建房间时能绕过上限。
+    # 这里不再用 "in" 做外层判断——那会让某个 IP 的首次请求完全跳过限流。
+    with chat_create_limits_lock:
+        count, start_time = chat_create_limits.get(client_ip, (0, now))
         if now - start_time < CHAT_CREATE_RATE_WINDOW:
             if count >= CHAT_CREATE_RATE_LIMIT:
                 return jsonify({"code":1,"msg":"创建房间过于频繁，请稍后再试"})
             chat_create_limits[client_ip] = (count + 1, start_time)
         else:
             chat_create_limits[client_ip] = (1, now)
-    else:
-        chat_create_limits[client_ip] = (1, now)
 
     if not request.is_json:
         return jsonify({"code":1,"msg":"请求格式错误"})
@@ -2029,6 +2963,76 @@ def chat_join():
     escaped_messages = _format_chat_messages(messages)
     return jsonify({"code":0,"room_id":room_id,"name":html.escape(room["name"]),"messages":escaped_messages})
 
+def deliver_message(room_id, nick, content, broadcast=True):
+    """把一条消息投递进房间——所有消息来源的唯一入口。
+
+    WebSocket、HTTP 轮询、以及将来任何外部来源（IRC 桥接等）都应当调用这里，
+    而不是各自复制一套"构造消息 + 维护成员 + 写盘 + 广播"的逻辑。
+    这样新接入一种来源时就不需要再抄一遍，也不会出现某条路径少做了校验。
+
+    参数:
+        room_id:   目标房间 ID
+        nick:      发送者昵称（会自动转义）
+        content:   消息原文（会自动做 BBCode 净化）
+        broadcast: 是否向该房间的 WebSocket 连接广播（HTTP 轮询者从房间读取，无需广播）
+
+    返回:
+        成功时返回消息 dict；房间不存在、内容为空/超长时返回 None。
+    """
+    if not room_id or not isinstance(content, str):
+        return None
+    content = content.strip()
+    if not content:
+        return None
+    if len(content) > MAX_MESSAGE_LENGTH:
+        return None
+
+    nick = (nick or "").strip()[:20] or "匿名"
+
+    with chat_lock:
+        room = chat_rooms.get(room_id)
+        if not room:
+            return None
+        # 同一昵称同一时刻只出现在一个房间，避免"幽灵成员"
+        for rid, r in chat_rooms.items():
+            if rid != room_id:
+                r["users"].discard(nick)
+        room["users"].add(nick)
+        room["last_activity"] = time.time()
+        msg = {
+            "id": str(uuid.uuid4())[:12],
+            "nick": html.escape(nick),
+            "content": sanitize_bbcode(content),
+            "timestamp": time.time(),
+        }
+        room["messages"].append(msg)
+
+    save_chat_data()
+
+    if broadcast:
+        _broadcast_to_room(room_id, {"type": "message", **msg})
+    return msg
+
+
+def _broadcast_to_room(room_id, payload):
+    """把一条消息推给房间内所有 WebSocket 连接。单个连接失败不影响其它连接。"""
+    try:
+        data = json.dumps(payload)
+    except Exception:
+        return
+    try:
+        with ws_rooms_lock:
+            conns = list(ws_rooms.get(room_id, set()))
+    except NameError:
+        # ws_rooms 尚未初始化（例如在纯 HTTP 场景下导入）：此时无连接可推
+        return
+    for conn in conns:
+        try:
+            conn.send(data)
+        except Exception:
+            pass
+
+
 @app.route("/chat/send", methods=["POST"])
 def chat_send():
     if not request.is_json:
@@ -2047,26 +3051,13 @@ def chat_send():
     rate_key = f"chat:{room_id}:{ip}"
     if not rate_limiter.allow(rate_key):
         return jsonify({"code":1,"msg":"发送过于频繁"}), 429
-    with chat_lock:
-            room = chat_rooms.get(room_id)
-            if not room:
-                return jsonify({"code":1,"msg":"房间不存在"})
-            nick = get_nickname()
-            for rid, r in chat_rooms.items():
-                if rid != room_id:
-                    r["users"].discard(nick)
-            room["users"].add(nick)
-            room["last_activity"] = time.time()
-            msg_id = str(uuid.uuid4())[:12]
-            escaped_nick = html.escape(nick)
-            msg = {
-                "id": msg_id,
-                "nick": escaped_nick,
-                "content": sanitize_bbcode(content),
-                "timestamp": time.time()
-            }
-            room["messages"].append(msg)
-    save_chat_data()
+
+    if room_id not in chat_rooms:
+        return jsonify({"code":1,"msg":"房间不存在"})
+
+    msg = deliver_message(room_id, get_nickname(), content)
+    if msg is None:
+        return jsonify({"code":1,"msg":"消息发送失败"})
     return jsonify({"code":0,"message":msg})
 
 @app.route("/chat/recv")
@@ -2115,7 +3106,7 @@ def chat_leave():
         if room:
             nick = get_nickname()
             room["users"].discard(nick)
-        save_chat_data()
+    save_chat_data()
     return jsonify({"code":0})
 
 @app.route("/chat/set_nick", methods=["POST"])
@@ -2126,6 +3117,118 @@ def chat_set_nick():
     nick = data.get("nick", "").strip()
     new_nick = set_nickname(nick)
     return jsonify({"code":0,"nick":html.escape(new_nick)})
+
+# ===================== 管理账号（仅用于删除问题消息） =====================
+def _admin_cfg():
+    return CONFIG.get("admin", {}) or {}
+
+def _admin_auth_modes():
+    """返回该管理账号启用的验证方式。
+
+    密码与动态验证码是"二选一或全选"关系：
+    - 只配了密码 -> 仅校验密码
+    - 只配了动态验证码 -> 仅校验验证码
+    - 两者都配 -> 两者都要通过
+    这样用户不必为了用上管理功能被迫安装验证器 App。
+    """
+    a = _admin_cfg()
+    return {
+        "password": bool(a.get("password_hash")),
+        "totp": bool(a.get("totp_secret")),
+    }
+
+def _admin_is_enabled():
+    a = _admin_cfg()
+    if not a.get("enabled") or not a.get("username"):
+        return False
+    modes = _admin_auth_modes()
+    return modes["password"] or modes["totp"]
+
+def _admin_required():
+    if not _admin_is_enabled():
+        return jsonify({"code":1,"msg":"管理功能未启用"}), 403
+    if not session.get("admin_authed"):
+        return jsonify({"code":1,"msg":"未登录"}), 403
+    return None
+
+@app.route("/admin/status")
+def admin_status():
+    """前端据此决定是否显示管理入口、以及需要填写哪些字段（不泄露任何密钥）。"""
+    modes = _admin_auth_modes()
+    return jsonify({"code":0, "enabled": _admin_is_enabled(),
+                    "authed": bool(session.get("admin_authed")),
+                    "need_password": modes["password"],
+                    "need_totp": modes["totp"]})
+
+@app.route("/admin/login", methods=["POST"])
+def admin_login():
+    if not _admin_is_enabled():
+        return jsonify({"code":1,"msg":"管理功能未启用"}), 403
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", ""))
+    code = str(data.get("totp_code", "")).strip()
+    a = _admin_cfg()
+    modes = _admin_auth_modes()
+
+    if not username or username != a.get("username"):
+        return jsonify({"code":1,"msg":"用户名或密码错误"}), 401
+
+    # 仅校验已配置的验证方式，未配置的方式不参与校验
+    bad_msg = "用户名或密码错误"
+    if modes["password"]:
+        pwd_hash = hashlib.sha256((password + app.secret_key).encode()).hexdigest()
+        if not hmac.compare_digest(pwd_hash, a.get("password_hash", "")):
+            return jsonify({"code":1,"msg":bad_msg}), 401
+
+    if modes["totp"]:
+        if pyotp is None:
+            return jsonify({"code":1,"msg":"服务器缺少 pyotp 依赖，无法校验动态验证码"}), 500
+        if not code:
+            return jsonify({"code":1,"msg":"请输入动态验证码"}), 401
+        try:
+            if not pyotp.TOTP(a.get("totp_secret", "")).verify(code, valid_window=1):
+                return jsonify({"code":1,"msg":"动态验证码错误"}), 401
+        except Exception:
+            return jsonify({"code":1,"msg":"动态验证码校验失败"}), 401
+
+    session["admin_authed"] = True
+    session.permanent = False
+    logger.info("管理员登录成功")
+    return jsonify({"code":0,"msg":"登录成功"})
+
+@app.route("/admin/logout", methods=["POST"])
+def admin_logout():
+    session.pop("admin_authed", None)
+    return jsonify({"code":0})
+
+@app.route("/chat/delete_message/<msg_id>", methods=["POST"])
+def chat_delete_message(msg_id):
+    """管理员删除指定消息（按全局唯一 id 匹配）。"""
+    guard = _admin_required()
+    if guard is not None:
+        return guard
+    if not msg_id or len(msg_id) > 64:
+        return jsonify({"code":1,"msg":"消息ID非法"})
+    found = False
+    with chat_lock:
+        for rid, room in chat_rooms.items():
+            msgs = room["messages"]
+            for i, m in enumerate(list(msgs)):
+                if m.get("id") == msg_id:
+                    try:
+                        msgs.remove(m)
+                    except ValueError:
+                        del msgs[i]
+                    found = True
+                    break
+            if found:
+                break
+    if not found:
+        return jsonify({"code":1,"msg":"消息不存在"})
+    save_chat_data()
+    logger.info(f"管理员删除消息: {msg_id}")
+    return jsonify({"code":0,"msg":"已删除"})
 
 # ===================== WebSocket 聊天室 =====================
 if SOCK_AVAILABLE:
@@ -2201,26 +3304,11 @@ if SOCK_AVAILABLE:
                         ws.send(json.dumps({"type":"error","message":"发送过于频繁"}))
                         continue
                     clean_expired_rooms()
-                    with chat_lock:
-                        room = chat_rooms.get(current_room)
-                        if not room:
-                            ws.send(json.dumps({"type":"error","message":"房间不存在"}))
-                            continue
-                        for rid, r in chat_rooms.items():
-                            if rid != current_room:
-                                r["users"].discard(nick)
-                        room["users"].add(nick)
-                        room["last_activity"] = time.time()
-                        msg_id = str(uuid.uuid4())[:12]
-                        escaped_nick = html.escape(nick)
-                        msg = {
-                            "id": msg_id,
-                            "nick": escaped_nick,
-                            "content": sanitize_bbcode(content),
-                            "timestamp": time.time()
-                        }
-                        room["messages"].append(msg)
-                    save_chat_data()
+                    # 与 HTTP 路径共用同一个投递入口，避免两边逻辑走偏
+                    msg = deliver_message(current_room, nick, content, broadcast=False)
+                    if msg is None:
+                        ws.send(json.dumps({"type":"error","message":"消息发送失败"}))
+                        continue
                     broadcast = json.dumps({"type":"message", **msg})
                     with ws_rooms_lock:
                         room_conns = ws_rooms.get(current_room, set()).copy()
@@ -2258,7 +3346,29 @@ if not SOCK_AVAILABLE:
 
 @app.route("/")
 def index():
-    return render_template("index.html", title=HOME_TITLE)
+    # 首页也列出已挂载的虚拟目录，省去先进"文件浏览"再找入口的麻烦
+    mounted = []
+    for vname in sorted(VIRTUAL_DIRS.keys()):
+        if vname in HIDDEN_FOLDERS:
+            continue
+        mounted.append({
+            "name": DISPLAY_NAMES.get(vname, vname),
+            "url": join_url_path("", vname),
+        })
+    return render_template("index.html", title=HOME_TITLE, mounted_dirs=mounted)
+
+def join_url_path(base, name):
+    """把父路径与子项名拼成一个 URL 路径并做百分号编码。
+
+    这里刻意不使用 os.path.join：虚拟目录的别名可以带冒号（例如把 D 盘
+    根目录挂成别名 "D:"）。在 Windows 上 os.path.join("D:", "子项")
+    得到的是 "D:子项"——分隔符被吃掉了，生成出来的链接点开就是 404。
+    URL 用的是正斜杠，与运行平台无关，所以这里手工拼。
+    """
+    base = (base or "").strip("/")
+    child = str(name).strip("/")
+    rel = f"{base}/{child}" if base else child
+    return "/files/" + urllib.parse.quote(rel, safe="/")
 
 @app.route('/files/', defaults={'relative_path': ''})
 @app.route('/files/<path:relative_path>')
@@ -2282,12 +3392,23 @@ def serve_directory(relative_path):
         abort(403)
     except Exception:
         abort(404)
-    dirs = sorted([i for i in items if not i.startswith('.') and os.path.isdir(os.path.join(target, i))])
-    files = sorted([i for i in items if not i.startswith('.') and os.path.isfile(os.path.join(target, i))])
+    # 过滤：以 . 开头的隐藏项 + 配置中的隐藏文件夹（不列出，仍可直接访问）
+    def _visible(nm):
+        return (not nm.startswith('.')) and (nm not in HIDDEN_FOLDERS)
+    dirs = sorted([i for i in items if _visible(i) and os.path.isdir(os.path.join(target, i))])
+    files = sorted([i for i in items if _visible(i) and os.path.isfile(os.path.join(target, i))])
+    # 虚拟目录只在共享根目录展示（作为别名入口）
+    is_share_root = (os.path.abspath(target) == os.path.abspath(SHARE_FOLDER))
+    if is_share_root:
+        existing = set(dirs)
+        for vname in sorted(VIRTUAL_DIRS.keys()):
+            if vname not in existing and vname not in HIDDEN_FOLDERS:
+                dirs.append(vname)
+        dirs = sorted(dirs)
     for i in dirs:
         data["items"].append({
-            "name": i,
-            "url": "/files/" + urllib.parse.quote(os.path.join(relative_path, i), safe="/"),
+            "name": DISPLAY_NAMES.get(i, i),
+            "url": join_url_path(relative_path, i),
             "is_dir": True, "size": "", "mtime": ""
         })
     for i in files:
@@ -2298,18 +3419,27 @@ def serve_directory(relative_path):
         except Exception:
             continue
         data["items"].append({
-            "name": i,
-            "url": "/files/" + urllib.parse.quote(os.path.join(relative_path, i), safe="/"),
+            "name": DISPLAY_NAMES.get(i, i),
+            "url": join_url_path(relative_path, i),
             "is_dir": False, "size": format_size(s), "mtime": format_mtime(m)
         })
+    # 目录列表页也要用标题图。render_template_string 虽然会走上下文处理器，
+    # 但这里显式传入更稳妥（且便于单测）。
+    data = dict(data)
+    data["nav_titles"] = get_nav_titles()
     return render_template_string('''
 <!DOCTYPE HTML><html><head><meta charset="utf-8"><title>目录：{{ path }}</title>
-<style>body{font-family:sans-serif;padding:20px;}ul{list-style:none;padding:0;}li{display:flex;justify-content:space-between;padding:6px 0;}a{flex:1;text-decoration:none;color:#0066cc;}a:hover{text-decoration:underline;}.file-info{color:#666;font-size:13px;}</style></head>
-<body><h1>目录：{{ path }}</h1><hr><ul>
+<style>body{font-family:sans-serif;padding:20px;}
+.title-banner{display:inline-block;height:auto;max-height:40px;max-width:min(70vw,520px);width:auto;object-fit:contain;vertical-align:middle;}
+.title-link{display:inline-flex;align-items:center;gap:8px;color:inherit;text-decoration:none;cursor:pointer;}
+.title-link:hover{opacity:0.86;}
+ul{list-style:none;padding:0;}li{display:flex;justify-content:space-between;padding:6px 0;}a{flex:1;text-decoration:none;color:#0066cc;}a:hover{text-decoration:underline;}.file-info{color:#666;font-size:13px;}
+.dirlink{display:inline-flex;align-items:center;}</style></head>
+<body><h1>{% if nav_titles.get('files') %}<a class="title-link" href="/" title="回到首页"><img class="title-banner" src="{{ nav_titles['files'] }}" alt="文件浏览" onerror="this.style.display='none';this.nextElementSibling.style.display='inline';"><span style="display:none;">📁 文件浏览</span></a>{% else %}<a class="title-link" href="/" title="回到首页">📁 文件浏览</a>{% endif %}：{{ path }}</h1><hr><ul>
 {% if parent_path %}<li><a href="{{ parent_path }}">../</a><span class="file-info">目录</span></li>{% endif %}
 {% for item in items %}<li><a href="{{ item.url }}">{{ item.name }}{{ "/" if item.is_dir else "" }}</a>
 <span class="file-info">{% if item.is_dir %}目录{% else %}{{ item.size }} • {{ item.mtime }}{% endif %}</span></li>{% endfor %}
-</ul><hr><a href="/">首页</a> | <a href="/transfer">传输中心</a><script src="/live2d/dist/autoload.js?v=2"></script></body></html>''', **data)
+</ul><hr><span class="dirlink"><a href="/">首页</a></span> | <span class="dirlink"><a href="/transfer">传输中心</a></span><script src="/live2d/dist/autoload.js?v=2"></script></body></html>''', **data)
 
 # ========== 错误页 ==========
 @app.errorhandler(404)
@@ -2769,12 +3899,22 @@ def _background_cleanup():
             clean_expired_files()
             cleanup_expired_peers()
             clean_expired_rooms()
+            # 已通过验证的身份也要按龄回收（原来只增不减，长时间运行会一直涨）
+            _cleanup_verified_ips(now)
+            # 建房间的限流计数同样需要回收，否则每个来过的 IP 都会永久占一条
+            with chat_create_limits_lock:
+                stale_ips = [ip for ip, (_c, _t) in chat_create_limits.items()
+                             if now - _t > CHAT_CREATE_RATE_WINDOW]
+                for ip in stale_ips:
+                    del chat_create_limits[ip]
             with _waf_challenge_lock:
                 expired_ips = [ip for ip, ts in _waf_challenge_ips.items() if now - ts > CHALLENGE_IP_TTL]
                 for ip in expired_ips:
                     del _waf_challenge_ips[ip]
-        except Exception:
-            pass
+        except Exception as e:
+            # 原来是 except Exception: pass——出错完全没有痕迹，出问题无法排查。
+            # 记录后继续循环，下一轮仍会尝试清理。
+            logger.error(f"后台清理出错: {e}")
 
 def get_system_snapshot():
     chat_data = {"active_rooms": 0, "total_users": 0, "ws_connections": 0, "http_sessions": 0, "total_rooms": 0}
@@ -2854,7 +3994,8 @@ def get_system_snapshot():
     with _waf_rate_blocked_lock:
         rate_blocked = _waf_rate_blocked
     with _waf_verified_ips_lock:
-        verified_count = len(_waf_verified_ips)
+        _verified_now = time.time()
+        verified_count = sum(1 for exp in _waf_verified_ips.values() if exp > _verified_now)
     with _waf_challenge_lock:
         now = time.time()
         active_challenge_ips = {ip: ts for ip, ts in _waf_challenge_ips.items() if now - ts < CHALLENGE_IP_TTL}
@@ -2905,6 +4046,7 @@ if __name__ == '__main__':
     check_single_instance(SERVER_PORT, SERVER_HOST)
     threading.Thread(target=_background_cleanup, daemon=True).start()
 
+    init_storage()
     load_temp_files()
     load_chat_data()
 

@@ -3,6 +3,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{ app_name }} {{ app_ver }} - 状态监控</title>
+{% from "_page_title.html" import page_title, title_css with context %}
+{{ title_css(44) }}
 <script src="/static/vendor/chart.umd.min.js"></script>
 <script src="/static/vendor/chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
@@ -110,7 +112,7 @@ body{font-family:"PingFang SC","Microsoft Yahei","Segoe UI",Arial,sans-serif;bac
 </head>
 <body>
 <div class="page-header">
-<h1>🩺 状态监控</h1>
+<h1>{{ page_title('health', '状态监控', '🩺') }}</h1>
 <div class="subtitle">{{ app_ver }} | 运行时长: <span id="uptime">--</span></div>
 </div>
 

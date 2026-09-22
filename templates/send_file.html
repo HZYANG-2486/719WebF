@@ -4,6 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{title}} | 传输中心</title>
+    {% from "_page_title.html" import page_title, title_css with context %}
+    {{ title_css(44) }}
     <style>
         *{box-sizing:border-box;margin:0;padding:0;}
         body{
@@ -182,7 +184,7 @@
 </head>
 <body>
     <div class="page-header">
-        <h1>📁 传输中心</h1>
+        <h1>{{ page_title('transfer', '传输中心', '📁') }}</h1>
         <div class="subtitle">快速、安全的文件传输工具</div>
     </div>
 
@@ -286,6 +288,52 @@ let recvBuffer = [];
 let isUploading = false;
 let lastUploadTime = 0;
 const UPLOAD_COOLDOWN = 3000;
+// ===== 新增：联机房间号 / 昵称 / 心跳定时器 =====
+let myRoom = "";
+let myNick = "";
+let _heartbeatTimer = null;
+let _signalLoopAbort = false;
+let localStorageOk = false;
+try { localStorage.getItem('ping'); localStorageOk = true; } catch(e){}
+
+// 本地缓存 UID（当 SameSite/Cookie 在 RadminLAN 虚拟网卡下失效时，作为强力回退）
+const _uidKey = 'p2p_uid_v2';
+const _roomKey = 'p2p_room_v2';
+const _nickKey = 'p2p_nick_v2';
+function _cachedUid(){ return localStorageOk ? (localStorage.getItem(_uidKey)||'') : ''; }
+function _setCachedUid(u){ if(localStorageOk && u) localStorage.setItem(_uidKey, u); }
+function _cachedRoom(){ return localStorageOk ? (localStorage.getItem(_roomKey)||'') : ''; }
+function _setCachedRoom(r){ if(localStorageOk) localStorage.setItem(_roomKey, r||''); }
+function _cachedNick(){ return localStorageOk ? (localStorage.getItem(_nickKey)||'') : ''; }
+function _setCachedNick(n){ if(localStorageOk) localStorage.setItem(_nickKey, n||''); }
+
+// 给 fetch 默认带上 X-P2P-UID，保证服务端在 Cookie 缺失时仍能识别身份
+const _origFetch = window.fetch;
+window.fetch = function(url, opt){
+    opt = opt || {};
+    if(myUid){
+        opt.headers = Object.assign({}, opt.headers || {});
+        opt.headers['X-P2P-UID'] = myUid;
+    }
+    return _origFetch.call(this, url, opt);
+};
+
+// 启动心跳：避免浏览器切后台、RadminLAN 偶发丢包、PEER_TIMEOUT 清理，造成"对方离线/ID消失"
+function startHeartbeat(){
+    stopHeartbeat();
+    _heartbeatTimer = setInterval(async ()=>{
+        if(!myUid) return;
+        try{ await fetch('/p2p/heartbeat'); }catch(e){}
+    }, 5000);
+}
+function stopHeartbeat(){
+    if(_heartbeatTimer){ clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
+}
+window.addEventListener('beforeunload', ()=>{
+    stopHeartbeat();
+    if(myUid){ try{ fetch('/p2p/leave', {method:'POST'}).catch(()=>{}); }catch(e){} }
+});
+
 
 const fileInput = document.getElementById('fileInput');
 const fileTip = document.getElementById('fileTip');
@@ -386,9 +434,25 @@ function renderStep3() {
 
     if(selectedRole === 'sender' && selectedMethod === 'p2p') {
         // 发送方 + P2P
+        const storedRoom = escapeHtml(_cachedRoom());
+        const storedNick = escapeHtml(_cachedNick());
         html = `
             <div class="panel-title">发送文件 — 面对面直传</div>
             <div class="panel-desc">选择文件，建立 P2P 连接后发送</div>
+
+            <div class="info-box" style="margin-top:10px;">
+                <div class="info-label"><span class="dot"></span>联机参数（发送和接收方必须输入<b>相同房间号</b>，建议 4-8 位字母/数字）</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;">
+                    <div>
+                        <label style="font-size:12px;color:#64748b;">房间号：</label>
+                        <input id="joinRoom" type="text" maxlength="16" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;" placeholder="例如：ABCD1234" value="${storedRoom}">
+                    </div>
+                    <div>
+                        <label style="font-size:12px;color:#64748b;">我的昵称（选填）：</label>
+                        <input id="joinNick" type="text" maxlength="32" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;" placeholder="例如：张三的电脑" value="${storedNick}">
+                    </div>
+                </div>
+            </div>
 
             <label class="drop-box" id="dropBox" aria-label="点击选择文件或拖拽文件到这里">
                 <div class="drop-icon">📂</div>
@@ -403,13 +467,14 @@ function renderStep3() {
                     <button class="btn btn-secondary btn-sm" onclick="joinP2P()">加入在线</button>
                     <button class="btn btn-secondary btn-sm" onclick="refreshPeers()">刷新列表</button>
                 </div>
+                <div class="info-value" id="myInfo" style="margin-top:10px;">我的ID：未加入 · 房间：未加入</div>
                 <div class="info-value" id="peerList" style="margin-top:10px;">在线列表：暂无</div>
             </div>
 
             <div class="info-box">
                 <div class="info-label"><span class="dot"></span>步骤 B：选择对方并连接</div>
                 <div class="select-row" style="margin-bottom:12px;">
-                    <label for="targetPeer">对方ID：</label>
+                    <label for="targetPeer">对方：</label>
                     <select id="targetPeer" name="targetPeer"></select>
                 </div>
                 <button class="btn btn-sm" onclick="connectPeer()">发起连接</button>
@@ -425,9 +490,25 @@ function renderStep3() {
         `;
     } else if(selectedRole === 'receiver' && selectedMethod === 'p2p') {
         // 接收方 + P2P
+        const storedRoom = escapeHtml(_cachedRoom());
+        const storedNick = escapeHtml(_cachedNick());
         html = `
             <div class="panel-title">接收文件 — 面对面直传</div>
             <div class="panel-desc">加入在线，等待对方发起连接和文件传输</div>
+
+            <div class="info-box" style="margin-top:10px;">
+                <div class="info-label"><span class="dot"></span>联机参数（发送和接收方必须输入<b>相同房间号</b>）</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;">
+                    <div>
+                        <label style="font-size:12px;color:#64748b;">房间号：</label>
+                        <input id="joinRoom" type="text" maxlength="16" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;" placeholder="例如：ABCD1234" value="${storedRoom}">
+                    </div>
+                    <div>
+                        <label style="font-size:12px;color:#64748b;">我的昵称（选填）：</label>
+                        <input id="joinNick" type="text" maxlength="32" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;" placeholder="例如：李四的电脑" value="${storedNick}">
+                    </div>
+                </div>
+            </div>
 
             <div class="info-box">
                 <div class="info-label"><span class="dot"></span>步骤 A：加入在线</div>
@@ -435,13 +516,14 @@ function renderStep3() {
                     <button class="btn btn-secondary btn-sm" onclick="joinP2P()">加入在线</button>
                     <button class="btn btn-secondary btn-sm" onclick="refreshPeers()">刷新列表</button>
                 </div>
+                <div class="info-value" id="myInfo" style="margin-top:10px;">我的ID：未加入 · 房间：未加入</div>
                 <div class="info-value" id="peerList" style="margin-top:10px;">在线列表：暂无</div>
             </div>
 
             <div class="info-box">
                 <div class="info-label"><span class="dot"></span>步骤 B：选择对方并连接</div>
                 <div class="select-row" style="margin-bottom:12px;">
-                    <label for="targetPeer">对方ID：</label>
+                    <label for="targetPeer">对方：</label>
                     <select id="targetPeer" name="targetPeer"></select>
                 </div>
                 <button class="btn btn-sm" onclick="connectPeer()">发起连接</button>
@@ -592,44 +674,130 @@ async function uploadTemp(){
     }
 }
 
+function escapeHtml(str){
+    if(str == null) return "";
+    return String(str).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]);
+}
+
 async function joinP2P(){
-    let r = await fetch("/p2p/join");
+    const roomEl = document.getElementById("joinRoom");
+    const nickEl = document.getElementById("joinNick");
+    const room = roomEl ? roomEl.value.trim().toUpperCase().replace(/[^A-Z0-9\-_]/g,"").slice(0,16) : (_cachedRoom()||"");
+    const nick = nickEl ? nickEl.value.trim().slice(0,32) : (_cachedNick()||"");
+    if(roomEl) roomEl.value = room;
+    if(nickEl) nickEl.value = nick;
+    myRoom = room; myNick = nick;
+    _setCachedRoom(room);
+    _setCachedNick(nick);
+
+    // 优先带缓存 UID，确保 Cookie 失败时身份稳定
+    const uidParam = _cachedUid();
+    const url = "/p2p/join?room=" + encodeURIComponent(room) + "&nick=" + encodeURIComponent(nick) +
+                (uidParam ? ("&p2p_uid=" + encodeURIComponent(uidParam)) : "");
+    let r = await fetch(url);
     let j = await r.json();
+    if(j.code !== 0) return alert("加入失败：" + (j.msg || "未知错误"));
     myUid = j.uid;
-    alert("你的在线ID：" + myUid);
+    _setCachedUid(myUid);
+    if(j.nick && !myNick) myNick = j.nick;
+    const roomShown = j.room || room || "（公共，建议填房间号隔离）";
+    const myInfoEl = document.getElementById("myInfo");
+    if(myInfoEl) myInfoEl.innerText = "我的ID：" + myUid.slice(0,10) + "… · 昵称：" + (myNick || "无") + " · 房间：" + roomShown;
+    alert("加入成功！\n在线ID：" + myUid + "\n房间：" + (roomShown) + "\n\n请让对方输入相同房间号后再点击“加入在线/刷新列表”。");
+    startHeartbeat();
     refreshPeers();
 }
 
 async function refreshPeers(){
-    let r = await fetch("/p2p/list");
+    const roomEl = document.getElementById("joinRoom");
+    const room = roomEl ? roomEl.value.trim().toUpperCase() : (myRoom || "");
+    const url = "/p2p/list" + (room ? ("?room=" + encodeURIComponent(room)) : "");
+    let r = await fetch(url);
     let j = await r.json();
+    let list = Array.isArray(j.list) ? j.list : [];
     let peerListEl = document.getElementById("peerList");
-    if(peerListEl) peerListEl.innerText = "在线列表：" + j.list.join(" | ");
+    if(peerListEl){
+        if(!list.length){
+            peerListEl.innerText = "在线列表：暂无（请确认房间号与对方一致，或稍后刷新）";
+        } else {
+            const names = list.map(p => {
+                if(!p) return "";
+                const u = typeof p === 'string' ? p : p.uid;
+                const n = typeof p === 'string' ? "" : (p.nick || "");
+                const self = typeof p !== 'string' && p.self;
+                if(!u) return "";
+                const short = u.slice(0,8)+"…";
+                let tag = n ? (n + "（" + short + "）") : short;
+                if(self) tag += " [我]";
+                return tag;
+            }).filter(Boolean);
+            peerListEl.innerText = "在线列表：" + names.join("  |  ");
+        }
+    }
     let sel = document.getElementById("targetPeer");
     if(!sel) return;
     sel.innerHTML = "";
-    j.list.forEach(u=>{
-        if(u!==myUid) {
-            let opt = document.createElement("option");
-            opt.value=u; opt.innerText=u;
-            sel.appendChild(opt);
-        }
+    list.forEach(p=>{
+        const u = typeof p === 'string' ? p : p.uid;
+        const n = typeof p === 'string' ? "" : (p.nick || "");
+        const self = typeof p !== 'string' && p.self;
+        if(!u || self) return;
+        let opt = document.createElement("option");
+        opt.value = u;
+        opt.innerText = n ? (n + "（" + u.slice(0,10) + "…）") : u;
+        sel.appendChild(opt);
     });
+    if(sel.children.length === 0){
+        let opt = document.createElement("option");
+        opt.value = ""; opt.innerText = "（暂无其他在线用户，请检查房间号）";
+        sel.appendChild(opt);
+    }
 }
 
 async function connectPeer(){
     targetUid = document.getElementById("targetPeer").value;
-    if(!targetUid) return alert("请先选择对方ID");
-    pc = new RTCPeerConnection({iceServers:[]});
+    if(!targetUid) return alert("请先选择对方（若列表为空，请确认房间号填写一致，双方点击刷新）");
+    _signalLoopAbort = false;
+    // 面对面直传在 RadminLAN 下通常能直连，但若走多层 NAT 需要增加 host 候选；
+    // 这里提供空 iceServers 即可，浏览器仍会产生 srflx/host 候选
+    pc = new RTCPeerConnection({
+        iceServers: [],
+        iceTransportPolicy: "all",
+        bundlePolicy: "balanced"
+    });
+    pc.oniceconnectionstatechange = () => {
+        const s = document.getElementById("connStatus");
+        if(!s) return;
+        const state = pc ? pc.iceConnectionState : "";
+        if(state === "connected" || state === "completed"){
+            s.innerText = "✅ 连接成功（ICE:" + state + "）";
+            s.className = "status-row green";
+            let btn = document.getElementById("btnP2P");
+            if(btn) btn.disabled = false;
+        } else if(state === "failed" || state === "disconnected" || state === "closed"){
+            s.innerText = "❌ 连接失败/已断开（ICE:" + state + "），请稍后重试或改用临时暂存";
+            s.className = "status-row red";
+            let btn = document.getElementById("btnP2P");
+            if(btn) btn.disabled = true;
+        } else if(state === "checking"){
+            s.innerText = "🔍 正在建立 P2P 连接（ICE:checking），请等待…";
+            s.className = "status-row";
+        }
+    };
     pc.onicecandidate = async e => {
         if(e.candidate){ await sendSignal({type:"candidate", candidate:e.candidate.toJSON()}); }
+        else { await sendSignal({type:"ice_done"}); }
     };
     pc.ondatachannel = e => {
         dataChannel = e.channel;
         dataChannel.bufferedAmountLowThreshold = BUFFER_THRESHOLD;
         setupDC();
     };
-    dataChannel = pc.createDataChannel("file");
+    try {
+        dataChannel = pc.createDataChannel("file", { ordered: true, maxRetransmits: 8 });
+    } catch(e) {
+        dataChannel = pc.createDataChannel("file");
+    }
     dataChannel.bufferedAmountLowThreshold = BUFFER_THRESHOLD;
     setupDC();
     const isInitiator = myUid < targetUid;
@@ -650,19 +818,26 @@ async function sendSignal(data){
 }
 
 async function loopSignal(){
-    while(true){
-        let res = await fetch("/p2p/signal/recv");
-        let data = await res.json();
-        if(!data.type) { await new Promise(r=>setTimeout(r,500)); continue; }
-        if(data.frm && data.frm !== targetUid) { await new Promise(r=>setTimeout(r,500)); continue; }
-        if(data.type === "offer"){
-            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-            let ans = await pc.createAnswer();
-            await pc.setLocalDescription(ans);
-            await sendSignal({type:"answer", sdp:pc.localDescription.toJSON()});
+    const WAIT_MS = 450;
+    while(!_signalLoopAbort){
+        try{
+            let res = await fetch("/p2p/signal/recv");
+            let data = await res.json();
+            if(!data.type){ await new Promise(r=>setTimeout(r,WAIT_MS)); continue; }
+            if(data.type === "ice_done"){ await new Promise(r=>setTimeout(r,WAIT_MS)); continue; }
+            if(data.frm && data.frm !== targetUid){ await new Promise(r=>setTimeout(r,WAIT_MS)); continue; }
+            if(data.type === "offer"){
+                await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                let ans = await pc.createAnswer();
+                await pc.setLocalDescription(ans);
+                await sendSignal({type:"answer", sdp:pc.localDescription.toJSON()});
+            }
+            else if(data.type === "answer"){ await pc.setRemoteDescription(new RTCSessionDescription(data.sdp)); }
+            else if(data.type === "candidate"){ await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+        } catch(e){
+            // RadminLAN 短断网时不要让信号循环死掉
+            await new Promise(r=>setTimeout(r,1500));
         }
-        else if(data.type === "answer"){ await pc.setRemoteDescription(new RTCSessionDescription(data.sdp)); }
-        else if(data.type === "candidate"){ await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
     }
 }
 
