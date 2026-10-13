@@ -10,8 +10,6 @@
 
 <!--生草的加了点东西 -->
 
-<!--不是东西呢owo-->
-
 ## 特性
 
 1. ~~氢量~~化
@@ -21,15 +19,14 @@
 5. 服务监控(实现仍有问题!)
 6. ~~AI使用~~
 7. 看板娘(你可以关闭, 基于[live2d-widget](https://github.com/stevenjoezhang/live2d-widget)做了部分修改)
-8. 自建保护系统 ~~(无言以对了...)~~ 进行防DDOS防护 (~~主要除非你是嘉豪应该不会乱搞吧owo~~)
+8. 自建保护系统 ~~(这...(⊙ˍ⊙))~~ 进行防DDOS防护 (~~主要除非你是嘉豪应该不会乱搞吧owo~~)
 9. 后台静默运行
-10. 提供本地配置更改工具
 
 ## 使用方法
 
 1. Star It!
 2. Download ZIP, 解压
-3. 参考配置
+3. 参照配置
 
 ## 配置
 
@@ -62,9 +59,9 @@ pip install -r requirements.txt
 
 ### 配置文件
 
-项目的配置存储存储于'config.xml'
+项目的配置存储在程序目录下的一个叫'config.xml'
 
-你可通过右键托盘修改配置
+你可通过右键托盘启动设置修改配置
 
 或是通过直接修改xml文件进行配置
 
@@ -76,9 +73,8 @@ Cloudflare_error_page使用MIT授权
 ## 使用的项目
 
 - [live2d-widget](https://github.com/stevenjoezhang/live2d-widget)
+- [Flask-Humanify](https://github.com/tn3w/flask-Humanify)
 - [Cloudflare-error-page](https://github.com/donlon/cloudflare-error-page)
-- [chart.js](https://github.com/chartjs)
-- [SCEditor](https://github.com/samclarke/SCEditor)
 
 ## 人物版权
 
@@ -86,7 +82,7 @@ Cloudflare_error_page使用MIT授权
 
 ## 更多
 
-Live2D 相关代码的使用请**遵守对应的许可**：
+Live2D 相关代码的使用请遵守对应的许可：
 
 Live2D Cubism SDK 2.1 的许可证：
 Live2D SDK License Agreement (Public)
